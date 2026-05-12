@@ -288,10 +288,7 @@ async function authenticate(options = {}) {
   try {
     const payload = { variant: activeVariant.id };
 
-    const isEditMode = new URLSearchParams(window.location.search).get('variant') === 'edit';
-    if (isEditMode && isLocalDevelopmentHostname(window.location.hostname)) {
-      payload.passcode = '***REMOVED***';
-    } else if (passcode) {
+    if (passcode) {
       payload.passcode = passcode;
     }
 
