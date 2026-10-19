@@ -15,8 +15,6 @@ const API_BASE_URL = isLocalDevelopmentHostname(window.location.hostname)
   ? 'http://localhost:3001'
   : '';
 
-const CHEV = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
-
 const authContainer = document.getElementById('auth-container');
 const contentContainer = document.getElementById('cv-container');
 const authError = document.getElementById('auth-error');
@@ -28,8 +26,7 @@ const downloadButton = document.getElementById('btn-dl');
 const logoutButton = document.getElementById('btn-logout');
 const editButton = document.getElementById('btn-edit');
 
-const openState = {};
-const expandedState = {};
+const sectionNav = document.getElementById('section-nav');
 
 function buildApiUrl(path) {
   return new URL(path, API_BASE_URL || window.location.origin);
@@ -136,12 +133,6 @@ function applyChrome() {
   applyLegalFooter();
 }
 
-function saveOpen() {
-  document.querySelectorAll('details[data-id]').forEach((detailsElement) => {
-    openState[detailsElement.dataset.id] = detailsElement.open;
-  });
-}
-
 function mkEntry(item) {
   const heading = localize(item.heading);
   const subheading = localize(item.subheading);
@@ -189,10 +180,11 @@ function mkEntry(item) {
   </div></div>`;
 }
 
-function mkSection(section) {
-  const isOpen = section.id in openState ? openState[section.id] : section.open;
-  const expanded = !!expandedState[section.id];
+function sectionAnchor(section) {
+  return `section-${section.id}`;
+}
 
+function mkSection(section) {
   let body = '';
 
   if (section.type === 'info') {
@@ -212,7 +204,26 @@ function mkSection(section) {
     }
   }
 
-  return `<details data-id="${section.id}"${isOpen ? ' open' : ''}><summary><h2>${localize(section.title)}</h2>${CHEV}</summary><div class="sec-body">${body}</div></details>`;
+  return `<section class="sec" id="${sectionAnchor(section)}"><h2>${localize(section.title)}</h2><div class="sec-body">${body}</div></section>`;
+}
+
+function renderSectionNav(sections) {
+  sectionNav.innerHTML = `<ul>${sections.map((section) => `<li><a href="#${sectionAnchor(section)}">${localize(section.title)}</a></li>`).join('')}</ul>`;
+  sectionNav.setAttribute('aria-label', localize({ en: 'Sections', de: 'Abschnitte' }));
+  highlightCurrentSection();
+}
+
+// The current section is the last one whose heading has scrolled past the top; at the page end,
+// short final sections can never get there, so the last one wins.
+function highlightCurrentSection() {
+  const sections = [...document.querySelectorAll('#cv-body .sec')];
+  const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+  const current = atEnd
+    ? sections.at(-1)
+    : sections.filter((section) => section.getBoundingClientRect().top <= 80).at(-1) ?? sections[0];
+  sectionNav.querySelectorAll('a').forEach((link) => {
+    link.toggleAttribute('aria-current', link.hash === `#${current?.id}`);
+  });
 }
 
 function applyThemeIcons() {
@@ -243,7 +254,9 @@ function render() {
 
   document.documentElement.lang = lang;
 
-  document.getElementById('cv-body').innerHTML = projectDocument(sourceDocument, view).sections.map(mkSection).join('');
+  const { sections } = projectDocument(sourceDocument, view);
+  document.getElementById('cv-body').innerHTML = sections.map(mkSection).join('');
+  renderSectionNav(sections);
   applyChrome();
 }
 
@@ -382,7 +395,6 @@ passcodeInput.addEventListener('keypress', (event) => {
 });
 
 document.getElementById('btn-lang').addEventListener('click', () => {
-  saveOpen();
   lang = lang === 'en' ? 'de' : 'en';
   persistLanguage();
   applyChrome();
@@ -390,7 +402,6 @@ document.getElementById('btn-lang').addEventListener('click', () => {
 });
 
 document.getElementById('btn-view').addEventListener('click', () => {
-  saveOpen();
   view = view === 'full' ? 'compact' : 'full';
   const url = new URL(window.location.href);
   if (view === 'full') url.searchParams.set('view', 'full');
@@ -426,18 +437,8 @@ editButton.addEventListener('click', async () => {
   toggleEditor();
 });
 
-window.addEventListener('beforeprint', () => {
-  saveOpen();
-  document.querySelectorAll('details[data-id]').forEach((detailsElement) => {
-    detailsElement.open = true;
-  });
-});
-
-window.addEventListener('afterprint', () => {
-  document.querySelectorAll('details[data-id]').forEach((detailsElement) => {
-    detailsElement.open = !!openState[detailsElement.dataset.id];
-  });
-});
+window.addEventListener('scroll', highlightCurrentSection, { passive: true });
+window.addEventListener('resize', highlightCurrentSection);
 
 lang = getStoredLanguage();
 theme = getStoredTheme();

@@ -782,7 +782,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     addWrap.appendChild(h('button', {
       className: 'ed-btn', 'aria-label': 'Add section', onClick: () => {
         const type = typeSel.value;
-        const newSec = { visibility: 'all', id: 'new_' + Date.now(), title: { en: 'New Section', de: 'Neuer Abschnitt' }, open: false, type };
+        const newSec = { visibility: 'all', id: 'new_' + Date.now(), title: { en: 'New Section', de: 'Neuer Abschnitt' }, type };
         if (type === 'info') newSec.rows = [];
         else newSec.items = [];
         sections().push(newSec);
@@ -848,12 +848,6 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       const advanced = h('details', { className: 'ed-section-advanced' }, h('summary', {}, 'Section identifier'), idWrap);
       secHeader.appendChild(advanced);
       meta.appendChild(visibilityControl(sec, () => { markDirty(); renderEditor(); }));
-
-      // Open default toggle
-      const openCb = h('input', { type: 'checkbox' });
-      openCb.checked = !!sec.open;
-      openCb.addEventListener('change', () => { sec.open = openCb.checked; markDirty(); });
-      meta.appendChild(h('label', { className: 'ed-shared-toggle' }, openCb, 'Open by default'));
 
       headerTop.appendChild(meta);
 

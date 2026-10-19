@@ -7,7 +7,6 @@
         "en": "Personal Information",
         "de": "Persönliche Daten"
       },
-      "open": true,
       "type": "info",
       "rows": [
         {
@@ -30,7 +29,6 @@
         "en": "Education",
         "de": "Bildungsweg"
       },
-      "open": true,
       "type": "entries",
       "items": [
         {
@@ -70,7 +68,6 @@
         "en": "Experience",
         "de": "Erfahrung"
       },
-      "open": true,
       "type": "entries",
       "items": [
         {

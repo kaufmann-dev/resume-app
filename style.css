@@ -237,7 +237,6 @@ header {
   right: 0;
   z-index: 10;
   padding: 4px 8px;
-  border-radius: 6px;
   background: var(--t1);
   color: var(--bg);
   font-size: 0.72rem;
@@ -245,13 +244,11 @@ header {
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease;
 }
 
 .tbtn:hover::after,
 .tbtn:focus-visible::after {
   opacity: 1;
-  transition-delay: 0.3s;
 }
 
 @media (hover: none) {
@@ -262,50 +259,57 @@ header {
 
 
 
-details {
+.sec {
   border-top: 1px solid var(--border);
-  transition: border-color 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  scroll-margin-top: 24px;
 }
 
-summary {
-  list-style: none;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.sec h2 {
   padding: 17px 0;
-  cursor: pointer;
-  user-select: none;
-}
-
-summary::-webkit-details-marker {
-  display: none;
-}
-
-summary h2 {
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--t3);
-  transition: color 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-}
-
-
-details[open]>summary h2 {
   color: var(--t1);
 }
 
-.chev {
-  width: 13px;
-  height: 13px;
-  color: var(--t3);
-  flex-shrink: 0;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+/* The section nav sits in the left margin and appears only where it fits beside the 800px column. */
+.section-nav {
+  display: none;
 }
 
-details[open]>summary .chev {
-  transform: rotate(180deg);
+@media (min-width: 1240px) {
+  .section-nav {
+    display: block;
+    position: fixed;
+    top: 64px;
+    left: max(24px, calc(50% - 600px));
+    width: 180px;
+  }
+}
+
+.section-nav ul {
+  list-style: none;
+}
+
+.section-nav a {
+  display: block;
+  padding: 5px 0 5px 12px;
+  border-left: 1.5px solid var(--border);
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--t3);
+  text-decoration: none;
+}
+
+.section-nav a:hover {
   color: var(--t1);
+}
+
+.section-nav a[aria-current] {
+  border-left-color: var(--t1);
+  color: var(--t1);
+  font-weight: 600;
 }
 
 .sec-body {
@@ -421,12 +425,12 @@ details[open]>summary .chev {
   border-bottom-color: var(--t1);
 }
 
-ul {
+.sec-body ul {
   list-style: none;
   margin-top: 7px;
 }
 
-ul li {
+.sec-body li {
   font-size: 0.88rem;
   color: var(--t2);
   padding-left: 13px;
@@ -435,7 +439,7 @@ ul li {
   line-height: 1.5;
 }
 
-ul li::before {
+.sec-body li::before {
   content: '–';
   position: absolute;
   left: 0;
@@ -603,21 +607,8 @@ body.is-auth-view #legal-footer {
   }
 
   .toolbar,
-  .show-more-btn,
-  .show-more-wrap {
+  .section-nav {
     display: none !important;
-  }
-
-  .hidden-entry {
-    display: grid !important;
-  }
-
-  details .sec-body {
-    display: block !important;
-  }
-
-  .chev {
-    display: none;
   }
 
   .entry {

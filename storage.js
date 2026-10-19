@@ -58,6 +58,12 @@ function convertVisibility(node) {
         : convertVisibility(value)]));
 }
 
+// Migration 3: sections are always expanded, so the per-section "open" default is gone.
+const removeSectionOpen = document => ({ ...document, sections: document.sections.map(({ open, ...section }) => section) });
+
+// Pending document migrations run in order on the raw stored JSON; the result is validated once.
+const DOCUMENT_MIGRATIONS = [[2, convertVisibility], [3, removeSectionOpen]];
+
 export async function initializeStorage({ pool, ...options }) {
   await transaction(pool, async client => {
     // Serialize first startup across replicas, including transactional DDL.
@@ -80,11 +86,12 @@ export async function initializeStorage({ pool, ...options }) {
       if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume.pdf', data.pdf.bytes, data.pdf.updatedAt]);
       await client.query('INSERT INTO app_migrations (version) VALUES (1)');
     }
-    if (!completed.has(2)) {
+    const pending = DOCUMENT_MIGRATIONS.filter(([version]) => !completed.has(version));
+    if (pending.length) {
       const { rows } = await client.query('SELECT data FROM app_document WHERE id = 1');
-      const document = documentSchema.parse(convertVisibility(rows[0].data));
+      const document = documentSchema.parse(pending.reduce((data, [, migrate]) => migrate(data), rows[0].data));
       await client.query('UPDATE app_document SET data = $1, revision = $2 WHERE id = 1', [JSON.stringify(document), randomUUID()]);
-      await client.query('INSERT INTO app_migrations (version) VALUES (2)');
+      for (const [version] of pending) await client.query('INSERT INTO app_migrations (version) VALUES ($1)', [version]);
     }
   });
   console.log('PostgreSQL storage ready; migrations complete');

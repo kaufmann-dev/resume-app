@@ -49,6 +49,7 @@ resume-app/
 - The page opens in the compact view, which hides content marked **Full view only**.
 - The toolbar toggle switches to the full view without reloading and keeps `?view=full` in the URL, so links can open the full view directly.
 - Viewers receive the whole document; the browser projects the selected view.
+- Sections are always expanded. On windows at least 1240px wide, a sidebar in the left margin lists the visible sections, links to them, and highlights the one being read. Narrower screens and print omit it.
 
 ## PostgreSQL Persistence
 
@@ -66,7 +67,7 @@ PostgreSQL is the only runtime store. Content and visibility settings use JSONB 
 
 On the first startup against a new database, the app imports `document.json`, `passcodes.json`, `api-keys.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
 
-Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so revoked keys and deleted content cannot return on restart. Do not delete that record.
+Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Migration version 3 removes the obsolete per-section `open` flag. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so revoked keys and deleted content cannot return on restart. Do not delete that record.
 
 **Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** API keys and viewer passcodes remain valid after import, subject to their existing expiry rules.
 
