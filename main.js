@@ -126,7 +126,7 @@ function applyChrome() {
   for (const [id, label] of Object.entries({
     'btn-edit': { en: 'Edit content', de: 'Inhalt bearbeiten' },
     'btn-dl': { en: 'Download PDF', de: 'PDF herunterladen' },
-    'btn-lang': { en: 'Switch to German', de: 'Zu Englisch wechseln' },
+    'btn-lang': { en: 'Deutsch', de: 'English' },
     'btn-logout': { en: 'Sign out', de: 'Abmelden' },
   })) {
     setButtonLabel(document.getElementById(id), label);
@@ -232,8 +232,8 @@ function highlightCurrentSection() {
 function applyThemeIcons() {
   const darkMode = theme === 'dark';
   setButtonLabel(document.getElementById('btn-theme'), darkMode
-    ? { en: 'Use light theme', de: 'Helles Design verwenden' }
-    : { en: 'Use dark theme', de: 'Dunkles Design verwenden' });
+    ? { en: 'Light theme', de: 'Helles Design' }
+    : { en: 'Dark theme', de: 'Dunkles Design' });
   const sun = document.getElementById('ico-sun');
   const moon = document.getElementById('ico-moon');
 
@@ -245,8 +245,8 @@ function applyViewIcons() {
   const fullView = view === 'full';
   const button = document.getElementById('btn-view');
   setButtonLabel(button, fullView
-    ? { en: 'Show compact version', de: 'Kompakte Version anzeigen' }
-    : { en: 'Show full version', de: 'Vollständige Version anzeigen' });
+    ? { en: 'Compact version', de: 'Kompakte Version' }
+    : { en: 'Full version', de: 'Vollständige Version' });
   button.setAttribute('aria-pressed', String(fullView));
   document.getElementById('ico-expand').style.display = fullView ? 'none' : '';
   document.getElementById('ico-collapse').style.display = fullView ? '' : 'none';
