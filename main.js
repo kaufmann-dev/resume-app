@@ -108,12 +108,9 @@ function applyLegalFooter() {
   }
 }
 
-// Desktop shows the label as a tooltip; the mobile menu shows it as visible text.
+// Every action shows its label as visible text, in the menu and in the wide-screen sidebar.
 function setButtonLabel(button, label) {
-  const text = localize(label);
-  button.setAttribute('aria-label', text);
-  button.dataset.tooltip = text;
-  button.querySelector('.tbtn-label').textContent = text;
+  button.querySelector('.tbtn-label').textContent = localize(label);
 }
 
 function applyChrome() {
