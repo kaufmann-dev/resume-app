@@ -1,4 +1,5 @@
 import { projectDocument } from './document-model.js';
+import { createIcons, Download, Languages, ListMinus, ListPlus, LogOut, Menu, Moon, SquarePen, Sun } from 'lucide';
 import { isLocalDevelopmentHostname } from './site-config.js';
 
 const DEFAULT_LANG = 'en';
@@ -27,6 +28,8 @@ const logoutButton = document.getElementById('btn-logout');
 const editButton = document.getElementById('btn-edit');
 
 const sectionNav = document.getElementById('section-nav');
+const toolbarWrap = document.getElementById('toolbar-wrap');
+const menuButton = document.getElementById('btn-menu');
 
 function buildApiUrl(path) {
   return new URL(path, API_BASE_URL || window.location.origin);
@@ -105,10 +108,12 @@ function applyLegalFooter() {
   }
 }
 
+// Desktop shows the label as a tooltip; the mobile menu shows it as visible text.
 function setButtonLabel(button, label) {
   const text = localize(label);
   button.setAttribute('aria-label', text);
   button.dataset.tooltip = text;
+  button.querySelector('.tbtn-label').textContent = text;
 }
 
 function applyChrome() {
@@ -120,6 +125,7 @@ function applyChrome() {
   passcodeInput.setAttribute('aria-label', localize({ en: 'Passcode', de: 'Passcode' }));
   authDividerLabel.textContent = localize({ en: 'or', de: 'oder' });
   adminLoginButton.textContent = localize({ en: 'Admin sign in', de: 'Admin-Zugang' });
+  document.getElementById('menu-label').textContent = localize({ en: 'Menu', de: 'Menü' });
   for (const [id, label] of Object.entries({
     'btn-edit': { en: 'Edit content', de: 'Inhalt bearbeiten' },
     'btn-dl': { en: 'Download PDF', de: 'PDF herunterladen' },
@@ -437,9 +443,30 @@ editButton.addEventListener('click', async () => {
   toggleEditor();
 });
 
+function setMenuOpen(open) {
+  toolbarWrap.classList.toggle('open', open);
+  menuButton.setAttribute('aria-expanded', String(open));
+}
+
+menuButton.addEventListener('click', () => setMenuOpen(!toolbarWrap.classList.contains('open')));
+// Choosing an action closes the menu; clicks outside or Escape dismiss it.
+document.getElementById('toolbar').addEventListener('click', (event) => {
+  if (event.target.closest('.tbtn')) setMenuOpen(false);
+});
+document.addEventListener('click', (event) => {
+  if (!toolbarWrap.contains(event.target)) setMenuOpen(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && toolbarWrap.classList.contains('open')) {
+    setMenuOpen(false);
+    menuButton.focus();
+  }
+});
+
 window.addEventListener('scroll', highlightCurrentSection, { passive: true });
 window.addEventListener('resize', highlightCurrentSection);
 
+createIcons({ icons: { Download, Languages, ListMinus, ListPlus, LogOut, Menu, Moon, SquarePen, Sun } });
 lang = getStoredLanguage();
 theme = getStoredTheme();
 document.documentElement.setAttribute('data-theme', theme);

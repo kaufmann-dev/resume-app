@@ -186,12 +186,21 @@ header {
 
 
 /* Icons sit inside transparent buttons, so the toolbar is pulled out by the space around each icon to align them with the text edge. */
+.toolbar-wrap {
+  flex-shrink: 0;
+  margin-right: -13px;
+}
+
 .toolbar {
   display: flex;
   gap: 5px;
-  flex-shrink: 0;
   flex-wrap: nowrap;
-  margin-right: -13px;
+}
+
+/* Desktop relies on icons with tooltips; the menu button and visible labels exist for the mobile menu. */
+.menu-btn,
+.tbtn-label {
+  display: none;
 }
 
 .tbtn {
@@ -200,6 +209,8 @@ header {
   font-family: inherit;
   align-items: center;
   justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
   padding: 8px 10px;
   background: transparent;
   border: none;
@@ -218,8 +229,8 @@ header {
 
 
 .tbtn svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .tbtn::after {
@@ -518,7 +529,7 @@ body.is-auth-view #legal-footer {
     --border: #e0e0e0;
   }
 
-  .toolbar,
+  .toolbar-wrap,
   .section-nav {
     display: none !important;
   }
@@ -554,9 +565,78 @@ body.is-auth-view #legal-footer {
     gap: 16px;
   }
 
-  .toolbar {
+  /* Touch screens never show tooltips, so the actions move into a menu with visible labels. */
+  .toolbar-wrap {
     order: -1;
-    margin: 0 0 0 -13px;
+    position: relative;
+    margin: 0 0 0 -10px;
+  }
+
+  .menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: var(--t1);
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .menu-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .menu-btn:hover,
+  .toolbar-wrap.open .menu-btn {
+    background: var(--tb-bg);
+  }
+
+  .toolbar {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 20;
+    flex-direction: column;
+    gap: 0;
+    min-width: 260px;
+    padding: 4px 0;
+    border: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .toolbar-wrap.open .toolbar {
+    display: flex;
+  }
+
+  .tbtn {
+    justify-content: flex-start;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 14px;
+    font-size: 0.9rem;
+    text-align: left;
+  }
+
+  .tbtn svg {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+  }
+
+  .tbtn-label {
+    display: inline;
+  }
+
+  .tbtn::after {
+    content: none;
   }
 
   .info-grid {
@@ -641,11 +721,6 @@ html {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.tbtn {
-  min-width: 40px;
-  min-height: 40px;
 }
 
 .name {

@@ -14,7 +14,7 @@ A small personal resume app built with Vite on the frontend and Express on the b
 
 ## Tech Stack
 
-- Frontend: Vite, plain HTML/CSS/JavaScript
+- Frontend: Vite, plain HTML/CSS/JavaScript, Lucide icons
 - Backend: Express
 - Runtime dependencies: `express`, `express-session`, `pg`, `openid-client`, `cors`, `@modelcontextprotocol/sdk`, `zod`
 - PostgreSQL stores all persistent application state
