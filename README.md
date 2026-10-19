@@ -49,7 +49,7 @@ resume-app/
 - The page opens in the compact view, which hides content marked **Full view only**.
 - The toolbar toggle switches to the full view without reloading and keeps `?view=full` in the URL, so links can open the full view directly.
 - Viewers receive the whole document; the browser projects the selected view.
-- Sections are always expanded. On windows at least 1240px wide, a sidebar in the left margin lists the visible sections, links to them, and highlights the one being read. Narrower screens and print omit it.
+- Sections are always expanded. On windows at least 1240px wide, a sidebar in the left margin lists the visible sections, links to them, and highlights the one being read; a matching sidebar in the right margin lists the page actions with their labels. Narrower screens show the actions in a labelled menu and omit the section list; print omits both.
 
 ## PostgreSQL Persistence
 
