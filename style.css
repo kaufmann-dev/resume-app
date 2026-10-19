@@ -316,7 +316,7 @@ header {
 .sec {
   margin-top: 24px;
   padding-top: 24px;
-  border-top: 1px solid var(--t1);
+  border-top: 1px solid var(--border);
   scroll-margin-top: 24px;
 }
 
