@@ -1,7 +1,9 @@
 // ── Visual Editor Module ──
-const ARROW_UP = '▲';
-const ARROW_DN = '▼';
-const CHEV_DN = '▾';
+const ICONS = {
+  up: '<polyline points="18 15 12 9 6 15"/>',
+  down: '<polyline points="6 9 12 15 18 9"/>',
+  remove: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+};
 
 function loc(val, lang) {
   if (val == null) return '';
@@ -60,14 +62,38 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
+function iconButton(name, label, onClick, danger = false) {
+  const button = h('button', { type: 'button', className: 'ed-icon-btn' + (danger ? ' ed-icon-btn--danger' : ''), 'aria-label': label, title: label, onClick });
+  button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+  return button;
+}
+
+function itemActions(items, index, onDataChange, rebuildList, noun) {
+  const move = offset => event => { event.stopPropagation(); items.splice(index + offset, 0, items.splice(index, 1)[0]); onDataChange(); rebuildList(); };
+  const up = iconButton('up', 'Move up', move(-1));
+  const down = iconButton('down', 'Move down', move(1));
+  up.disabled = index === 0;
+  down.disabled = index === items.length - 1;
+  const remove = iconButton('remove', `Delete ${noun}`, async event => {
+    event.stopPropagation();
+    if (await confirmDialog(`Delete this ${noun}?`)) { items.splice(index, 1); onDataChange(); rebuildList(); }
+  }, true);
+  return h('div', { className: 'ed-item-actions' }, up, down, remove);
+}
+
+// Only the exception is labelled; content without a badge appears in both views.
+function visibilityBadge(node) {
+  const badge = h('span', { className: 'ed-visibility-badge' }, 'Full view only');
+  badge.hidden = node.visibility !== 'full';
+  return badge;
+}
+
 function inputField(label, value, onChange, placeholder, multiline = false) {
   const inp = h(multiline ? 'textarea' : 'input', { className: multiline ? 'ed-textarea' : 'ed-input', ...(multiline ? { rows: '3' } : { type: 'text' }), placeholder: placeholder || '' });
   inp.value = value || '';
   inp.addEventListener('input', () => onChange(inp.value));
   const wrap = h('div', { className: 'ed-field-col' });
-  const lbl = h('div', { className: 'ed-field-col-label' });
-  lbl.innerHTML = label || '&nbsp;';
-  wrap.appendChild(lbl);
+  if (label) wrap.appendChild(h('div', { className: 'ed-field-col-label' }, label));
   wrap.appendChild(inp);
   return wrap;
 }
@@ -81,7 +107,7 @@ function bilingualField(labelText, value, onChange, control, multiline = false) 
     const isShared = !isLocalized(currentVal);
 
     const labelRow = h('div', { className: 'ed-field-heading' });
-    labelRow.appendChild(h('span', { className: 'ed-field-label', style: 'margin-bottom:0' }, labelText));
+    labelRow.appendChild(h('span', { className: 'ed-field-label' }, labelText));
     const cb = h('input', { type: 'checkbox' });
     cb.checked = isShared;
     cb.addEventListener('change', () => {
@@ -114,10 +140,8 @@ function bilingualField(labelText, value, onChange, control, multiline = false) 
 
 function sectionCaption(section) {
   const count = (section.items || section.rows || []).length;
-  return `${visibilityLabel(section.visibility)} · ${count} ${section.type === 'info' ? (count === 1 ? 'row' : 'rows') : (count === 1 ? 'entry' : 'entries')}`;
+  return `${section.visibility === 'full' ? 'Full view only · ' : ''}${count} ${section.type === 'info' ? (count === 1 ? 'row' : 'rows') : (count === 1 ? 'entry' : 'entries')}`;
 }
-
-function visibilityLabel(value) { return value === 'full' ? 'Full view only' : 'Always'; }
 
 function formatBytes(bytes) {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return '';
@@ -155,16 +179,9 @@ function renderInfoCard(row, index, rows, onDataChange, rebuildList) {
   const header = h('div', { className: 'ed-item-header' });
   header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, loc(row.label, 'en') || '(untitled)'));
 
-  const badge = h('span', { className: 'ed-visibility-badge' }, visibilityLabel(row.visibility));
+  const badge = visibilityBadge(row);
   header.appendChild(badge);
-  const actions = h('div', { className: 'ed-item-actions' });
-  const up = h('button', { className: 'ed-item-action-btn', title: 'Move up', onClick: e => { e.stopPropagation(); if (index > 0) { rows.splice(index - 1, 0, rows.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_UP);
-  const dn = h('button', { className: 'ed-item-action-btn', title: 'Move down', onClick: e => { e.stopPropagation(); if (index < rows.length - 1) { rows.splice(index + 1, 0, rows.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_DN);
-  const del = h('button', { className: 'ed-item-action-btn ed-item-action-btn--danger', title: 'Delete', onClick: async e => { e.stopPropagation(); if (await confirmDialog('Delete this row?')) { rows.splice(index, 1); onDataChange(); rebuildList(); } } }, '✕');
-  if (index === 0) up.disabled = true;
-  if (index === rows.length - 1) dn.disabled = true;
-  actions.append(up, dn, del);
-  header.appendChild(actions);
+  header.appendChild(itemActions(rows, index, onDataChange, rebuildList, 'row'));
 
   header.querySelector('.ed-item-title').addEventListener('click', event => {
     const open = card.classList.toggle('open');
@@ -173,7 +190,7 @@ function renderInfoCard(row, index, rows, onDataChange, rebuildList) {
   card.appendChild(header);
 
   const body = h('div', { className: 'ed-item-body' });
-  body.appendChild(visibilityControl(row, () => { badge.textContent = visibilityLabel(row.visibility); onDataChange(); }));
+  body.appendChild(visibilityControl(row, () => { badge.hidden = row.visibility !== 'full'; onDataChange(); }));
   body.appendChild(contentField('Label', row, 'label', v => { onDataChange(); header.querySelector('.ed-item-title').textContent = loc(v, 'en') || '(untitled)'; }));
   body.appendChild(contentField('Value', row, 'value', v => { onDataChange(); }));
 
@@ -191,20 +208,20 @@ function renderInfoEditor(section, onDataChange) {
     rows.forEach((row, i) => list.appendChild(renderInfoCard(row, i, rows, onDataChange, rebuildList)));
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
-      className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
+      className: 'ed-btn ed-add-btn', onClick: () => {
         rows.push({ visibility: 'all', label: { en: '', de: '' }, value: { en: '', de: '' } });
         section.rows = rows;
         onDataChange();
         rebuildList();
       }
-    }, '+ Add Row'));
+    }, 'Add row'));
   }
 
   rebuildList();
   return wrap;
 }
 
-function renderHighlights(highlights, onDataChange, label = 'Highlights / Bullet Points') {
+function renderHighlights(highlights, onDataChange, label = 'Bullets') {
   const wrap = h('div', { className: 'ed-field-group' });
   function rebuild() {
     wrap.replaceChildren(h('span', { className: 'ed-field-label' }, label));
@@ -212,10 +229,10 @@ function renderHighlights(highlights, onDataChange, label = 'Highlights / Bullet
       const row = h('div', { className: 'ed-field-group' });
       row.classList.add('ed-bullet');
       row.appendChild(bilingualField(label === 'Tags' ? 'Tag' : `Bullet ${index + 1}`, item.text, value => { item.text = value; onDataChange(); }, visibilityControl(item, onDataChange), label !== 'Tags'));
-      row.appendChild(h('button', { className: 'ed-btn ed-btn--danger', onClick: () => { highlights.splice(index, 1); onDataChange(); rebuild(); } }, 'Remove'));
+      row.appendChild(iconButton('remove', label === 'Tags' ? 'Remove tag' : 'Remove bullet', () => { highlights.splice(index, 1); onDataChange(); rebuild(); }, true));
       wrap.appendChild(row);
     });
-    wrap.appendChild(h('button', { className: 'ed-btn', onClick: () => { highlights.push({ text: { en: '', de: '' }, visibility: 'all' }); onDataChange(); rebuild(); } }, label === 'Tags' ? '+ Add Tag' : '+ Add Bullet'));
+    wrap.appendChild(h('button', { className: 'ed-btn', onClick: () => { highlights.push({ text: { en: '', de: '' }, visibility: 'all' }); onDataChange(); rebuild(); } }, label === 'Tags' ? 'Add tag' : 'Add bullet'));
   }
   rebuild();
   return wrap;
@@ -227,16 +244,9 @@ function renderEntryCard(item, index, items, onDataChange, rebuildList) {
   const header = h('div', { className: 'ed-item-header' });
   header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, loc(item.heading, 'en') || '(untitled)'));
 
-  const badge = h('span', { className: 'ed-visibility-badge' }, visibilityLabel(item.visibility));
+  const badge = visibilityBadge(item);
   header.appendChild(badge);
-  const actions = h('div', { className: 'ed-item-actions' });
-  const up = h('button', { className: 'ed-item-action-btn', title: 'Move up', onClick: e => { e.stopPropagation(); if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_UP);
-  const dn = h('button', { className: 'ed-item-action-btn', title: 'Move down', onClick: e => { e.stopPropagation(); if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_DN);
-  const del = h('button', { className: 'ed-item-action-btn ed-item-action-btn--danger', title: 'Delete', onClick: async e => { e.stopPropagation(); if (await confirmDialog('Delete this entry?')) { items.splice(index, 1); onDataChange(); rebuildList(); } } }, '✕');
-  if (index === 0) up.disabled = true;
-  if (index === items.length - 1) dn.disabled = true;
-  actions.append(up, dn, del);
-  header.appendChild(actions);
+  header.appendChild(itemActions(items, index, onDataChange, rebuildList, 'entry'));
 
   header.querySelector('.ed-item-title').addEventListener('click', event => {
     const open = card.classList.toggle('open');
@@ -245,7 +255,7 @@ function renderEntryCard(item, index, items, onDataChange, rebuildList) {
   card.appendChild(header);
 
   const body = h('div', { className: 'ed-item-body' });
-  body.appendChild(visibilityControl(item, () => { badge.textContent = visibilityLabel(item.visibility); onDataChange(); }));
+  body.appendChild(visibilityControl(item, () => { badge.hidden = item.visibility !== 'full'; onDataChange(); }));
   body.appendChild(contentField('Heading', item, 'heading', v => { onDataChange(); header.querySelector('.ed-item-title').textContent = loc(v, 'en') || '(untitled)'; }));
   body.appendChild(contentField('Subheading', item, 'subheading', v => { onDataChange(); }));
   body.appendChild(contentField('Info', item, 'info', v => { onDataChange(); }));
@@ -271,13 +281,13 @@ function renderEntriesEditor(section, onDataChange) {
     items.forEach((item, i) => list.appendChild(renderEntryCard(item, i, items, onDataChange, rebuildList)));
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
-      className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
+      className: 'ed-btn ed-add-btn', onClick: () => {
         items.push({ visibility: 'all', heading: { en: '', de: '' }, subheading: { en: '', de: '' }, info: { en: '', de: '' }, subinfo: { en: '', de: '' }, highlights: [] });
         section.items = items;
         onDataChange();
         rebuildList();
       }
-    }, '+ Add Entry'));
+    }, 'Add entry'));
   }
 
   rebuildList();
@@ -290,16 +300,9 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
   const header = h('div', { className: 'ed-item-header' });
   header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, authorStr + ' (' + (pub.year || '') + ')'));
 
-  const badge = h('span', { className: 'ed-visibility-badge' }, visibilityLabel(pub.visibility));
+  const badge = visibilityBadge(pub);
   header.appendChild(badge);
-  const actions = h('div', { className: 'ed-item-actions' });
-  const up = h('button', { className: 'ed-item-action-btn', title: 'Move up', onClick: e => { e.stopPropagation(); if (index > 0) { items.splice(index - 1, 0, items.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_UP);
-  const dn = h('button', { className: 'ed-item-action-btn', title: 'Move down', onClick: e => { e.stopPropagation(); if (index < items.length - 1) { items.splice(index + 1, 0, items.splice(index, 1)[0]); onDataChange(); rebuildList(); } } }, ARROW_DN);
-  const del = h('button', { className: 'ed-item-action-btn ed-item-action-btn--danger', title: 'Delete', onClick: async e => { e.stopPropagation(); if (await confirmDialog('Delete this publication?')) { items.splice(index, 1); onDataChange(); rebuildList(); } } }, '✕');
-  if (index === 0) up.disabled = true;
-  if (index === items.length - 1) dn.disabled = true;
-  actions.append(up, dn, del);
-  header.appendChild(actions);
+  header.appendChild(itemActions(items, index, onDataChange, rebuildList, 'publication'));
   header.querySelector('.ed-item-title').addEventListener('click', event => {
     const open = card.classList.toggle('open');
     event.currentTarget.setAttribute('aria-expanded', String(open));
@@ -307,7 +310,7 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
   card.appendChild(header);
 
   const body = h('div', { className: 'ed-item-body' });
-  body.appendChild(visibilityControl(pub, () => { badge.textContent = visibilityLabel(pub.visibility); onDataChange(); }));
+  body.appendChild(visibilityControl(pub, () => { badge.hidden = pub.visibility !== 'full'; onDataChange(); }));
 
   // Authors
   const authGroup = h('div', { className: 'ed-field-group' });
@@ -327,10 +330,10 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
       boldCb.checked = !!a.bold;
       boldCb.addEventListener('change', () => { a.bold = boldCb.checked; onDataChange(); });
       row.appendChild(h('label', { className: 'ed-pub-bold-toggle' }, boldCb, 'Bold'));
-      row.appendChild(h('button', { className: 'ed-item-action-btn ed-item-action-btn--danger', 'aria-label': 'Remove author', onClick: () => { pub.authors.splice(ai, 1); onDataChange(); rebuildAuthors(); } }, '✕'));
+      row.appendChild(iconButton('remove', 'Remove author', () => { pub.authors.splice(ai, 1); onDataChange(); rebuildAuthors(); }, true));
       authList.appendChild(row);
     });
-    authList.appendChild(h('button', { className: 'ed-btn', onClick: () => { pub.authors.push({ name: '', bold: false, visibility: 'all' }); onDataChange(); rebuildAuthors(); } }, '+ Author'));
+    authList.appendChild(h('button', { className: 'ed-btn', onClick: () => { pub.authors.push({ name: '', bold: false, visibility: 'all' }); onDataChange(); rebuildAuthors(); } }, 'Add author'));
   }
   rebuildAuthors();
   authGroup.appendChild(authList);
@@ -362,13 +365,13 @@ function renderPubEditor(section, onDataChange) {
     items.forEach((pub, i) => list.appendChild(renderPubCard(pub, i, items, onDataChange, rebuildList)));
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
-      className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
+      className: 'ed-btn ed-add-btn', onClick: () => {
         items.push({ visibility: 'all', authors: [{ name: '', bold: true, visibility: 'all' }], year: '', title: { en: '', de: '' }, institution: { en: '', de: '' } });
         section.items = items;
         onDataChange();
         rebuildList();
       }
-    }, '+ Add Publication'));
+    }, 'Add publication'));
   }
 
   rebuildList();
@@ -495,27 +498,17 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     const statusBadge = h('span', {
       className: 'ed-pc-status ' + (isExpired ? 'ed-pc-status--expired' : 'ed-pc-status--active')
     }, isExpired ? 'Expired' : 'Active');
-    const titleWrap = h('div', { style: 'display:flex;align-items:center;gap:10px;flex:1;min-width:0' });
-    titleWrap.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, entry.code || '(empty)'));
-    titleWrap.appendChild(statusBadge);
-    header.appendChild(titleWrap);
-
-    const actions = h('div', { className: 'ed-item-actions' });
-    const del = h('button', {
-      className: 'ed-item-action-btn ed-item-action-btn--danger', title: 'Delete', onClick: async e => {
-        e.stopPropagation();
-        if (await confirmDialog('Delete passcode "' + entry.code + '"?')) {
-          await deletePasscode(index);
-        }
-      }
-    }, '✕');
-    actions.appendChild(del);
-    header.appendChild(actions);
+    header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, entry.code || '(empty)'));
+    header.appendChild(statusBadge);
+    header.appendChild(h('div', { className: 'ed-item-actions' }, iconButton('remove', 'Delete passcode', async event => {
+      event.stopPropagation();
+      if (await confirmDialog('Delete passcode "' + entry.code + '"?')) await deletePasscode(index);
+    }, true)));
 
     header.querySelector('.ed-item-title').addEventListener('click', event => {
-    const open = card.classList.toggle('open');
-    event.currentTarget.setAttribute('aria-expanded', String(open));
-  });
+      const open = card.classList.toggle('open');
+      event.currentTarget.setAttribute('aria-expanded', String(open));
+    });
     card.appendChild(header);
 
     const body = h('div', { className: 'ed-item-body' });
@@ -566,13 +559,13 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     wrap.appendChild(list);
 
     wrap.appendChild(h('button', {
-      className: 'ed-btn', style: 'margin-top:16px', onClick: () => {
+      className: 'ed-btn ed-add-btn', onClick: () => {
         const tomorrow = new Date();
         tomorrow.setFullYear(tomorrow.getFullYear() + 1);
         const defaultExpiry = tomorrow.toISOString().split('T')[0];
         addPasscode('NEW_CODE', defaultExpiry);
       }
-    }, '+ Add Passcode'));
+    }, 'Add passcode'));
 
     return wrap;
   }
@@ -759,7 +752,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
 
     // Settings modes: no sidebar, just main content
     if (activeDoc === 'passcodes' || activeDoc === 'api-keys' || activeDoc === 'pdf') {
-      const main = h('div', { className: 'ed-main', style: 'transform:none;position:relative;' });
+      const main = h('div', { className: 'ed-main' });
       main.appendChild(activeDoc === 'api-keys' ? renderApiKeys() : activeDoc === 'pdf' ? renderPdf() : renderPasscodesEditor());
       layout.appendChild(main);
       overlay.appendChild(layout);
@@ -769,18 +762,17 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
 
     // Sidebar
     const sidebar = h('div', { className: 'ed-sidebar' });
-    const sideHeader = h('div', { className: 'ed-sidebar-header' });
-    sideHeader.appendChild(h('span', { className: 'ed-sidebar-title' }, 'Sections'));
+    sidebar.appendChild(h('div', { className: 'ed-sidebar-header' }, h('span', { className: 'ed-sidebar-title' }, 'Sections')));
 
-    const addWrap = h('div', { style: 'display:flex; align-items:center; gap: 4px;' });
-    const typeSel = h('select', { className: 'ed-select-add', 'aria-label': 'New section type' });
+    const addWrap = h('div', { className: 'ed-sidebar-add' });
+    const typeSel = h('select', { className: 'ed-input', 'aria-label': 'New section type' });
     typeSel.appendChild(h('option', { value: 'entries' }, 'Entries'));
-    typeSel.appendChild(h('option', { value: 'info' }, 'Info'));
-    typeSel.appendChild(h('option', { value: 'pub' }, 'Pub'));
+    typeSel.appendChild(h('option', { value: 'info' }, 'Info rows'));
+    typeSel.appendChild(h('option', { value: 'pub' }, 'Publications'));
 
     addWrap.appendChild(typeSel);
     addWrap.appendChild(h('button', {
-      className: 'ed-btn', 'aria-label': 'Add section', onClick: () => {
+      className: 'ed-btn', onClick: () => {
         const type = typeSel.value;
         const newSec = { visibility: 'all', id: 'new_' + Date.now(), title: { en: 'New Section', de: 'Neuer Abschnitt' }, type };
         if (type === 'info') newSec.rows = [];
@@ -791,27 +783,24 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
         markDirty();
         renderEditor();
       }
-    }, '+'));
-    sideHeader.appendChild(addWrap);
-    sidebar.appendChild(sideHeader);
+    }, 'Add section'));
 
     const sideList = h('div', { className: 'ed-sidebar-list' });
     sections().forEach((sec, i) => {
       const item = h('div', { className: 'ed-sec-item' + (i === selectedIdx ? ' active' : '') });
 
-      const arrows = h('div', { className: 'ed-sec-arrows' });
-      const upBtn = h('button', { className: 'ed-arrow-btn', 'aria-label': 'Move section up', onClick: e => { e.stopPropagation(); if (i > 0) { sections().splice(i - 1, 0, sections().splice(i, 1)[0]); selectedIdx = i - 1; markDirty(); renderEditor(); } } }, ARROW_UP);
-      const dnBtn = h('button', { className: 'ed-arrow-btn', 'aria-label': 'Move section down', onClick: e => { e.stopPropagation(); if (i < sections().length - 1) { sections().splice(i + 1, 0, sections().splice(i, 1)[0]); selectedIdx = i + 1; markDirty(); renderEditor(); } } }, ARROW_DN);
-      if (i === 0) upBtn.disabled = true;
-      if (i === sections().length - 1) dnBtn.disabled = true;
-      arrows.append(upBtn, dnBtn);
-      item.appendChild(arrows);
+      const moveSection = offset => event => { event.stopPropagation(); sections().splice(i + offset, 0, sections().splice(i, 1)[0]); selectedIdx = i + offset; markDirty(); renderEditor(); };
+      const upBtn = iconButton('up', 'Move section up', moveSection(-1));
+      const dnBtn = iconButton('down', 'Move section down', moveSection(1));
+      upBtn.disabled = i === 0;
+      dnBtn.disabled = i === sections().length - 1;
       const select = h('button', { className: 'ed-section-select', 'aria-current': i === selectedIdx ? 'true' : 'false', onClick: () => { selectedIdx = i; mobileShowDetail = true; renderEditor(); } },
         h('span', { className: 'ed-sec-item-label' }, loc(sec.title, 'en') || sec.id),
         h('span', { className: 'ed-section-caption' }, sectionCaption(sec)));
-      item.appendChild(select);
+      item.append(select, h('div', { className: 'ed-sec-arrows' }, upBtn, dnBtn));
       sideList.appendChild(item);
     });
+    sideList.appendChild(addWrap);
     sidebar.appendChild(sideList);
     layout.appendChild(sidebar);
 
@@ -829,7 +818,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       const secHeader = h('div', { className: 'ed-section-header' });
 
       const backBtn = h('button', { className: 'ed-mobile-back-btn', onClick: () => { mobileShowDetail = false; renderEditor(); } });
-      backBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg> Back to Sections';
+      backBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg> All sections';
       secHeader.appendChild(backBtn);
 
       const headerTop = h('div', { className: 'ed-section-header-top' });
@@ -840,9 +829,8 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       secHeader.appendChild(h('p', { className: 'ed-help' }, 'Choose whether this section appears in the compact view or only in the full view. Its visibility also applies to every item inside.'));
 
       // ID field
-      const idWrap = h('div', { style: 'display:flex;align-items:center;gap:6px;' });
-      idWrap.appendChild(h('span', { className: 'ed-field-col-label', style: 'margin-bottom:0' }, 'ID'));
-      const idInp = h('input', { className: 'ed-input', type: 'text', 'aria-label': 'Section identifier', value: sec.id, style: 'width:120px;font-size:0.7rem;padding:6px 10px;' });
+      const idWrap = h('div', { className: 'ed-section-id' });
+      const idInp = h('input', { className: 'ed-input ed-code', type: 'text', 'aria-label': 'Section identifier', value: sec.id });
       idInp.addEventListener('input', () => { sec.id = idInp.value; markDirty(); });
       idWrap.appendChild(idInp);
       const advanced = h('details', { className: 'ed-section-advanced' }, h('summary', {}, 'Section identifier'), idWrap);
@@ -861,11 +849,11 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
             renderEditor();
           }
         }
-      }, 'Delete Section'));
+      }, 'Delete section'));
       secHeader.appendChild(headerTop);
 
       // Section title
-      secHeader.appendChild(contentField('Section Title', sec, 'title', v => { markDirty(); sectionTitle.textContent = loc(v, 'en') || 'Untitled section'; sideList.children[selectedIdx]?.querySelector('.ed-sec-item-label')?.replaceWith(h('span', { className: 'ed-sec-item-label' }, loc(v, 'en'))); }));
+      secHeader.appendChild(contentField('Section title', sec, 'title', v => { markDirty(); sectionTitle.textContent = loc(v, 'en') || 'Untitled section'; sideList.children[selectedIdx]?.querySelector('.ed-sec-item-label')?.replaceWith(h('span', { className: 'ed-sec-item-label' }, loc(v, 'en'))); }));
 
       main.appendChild(secHeader);
 
