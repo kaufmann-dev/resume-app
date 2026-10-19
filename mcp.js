@@ -10,6 +10,7 @@ import { applyJsonPatch, patchOperationSchema } from './document-patch.js';
 const hash = key => createHash('sha256').update(key).digest();
 const formatSchema = z.enum(['json', 'markdown']).optional();
 const localeSchema = z.enum(['en', 'de']).optional();
+const viewSchema = z.enum(['compact', 'full']);
 const sectionSummarySchema = z.object({ id: z.string(), type: z.string(), title: localizedSchema, visibility: visibilitySchema, count: z.number() });
 const changeSchema = z.object({ op: z.string(), path: z.string().optional(), from: z.string().optional(), before: z.unknown().optional(), after: z.unknown().optional() });
 export function mountMcp(app, { storage, store, requireAdmin }) {
@@ -74,12 +75,12 @@ export function mountMcp(app, { storage, store, requireAdmin }) {
       annotations: { readOnlyHint: true }
     }, async () => result(await store.read()));
     server.registerTool('preview_document', {
-      description: 'Read the visible content for one document variant. Pass format "markdown" (with optional locale "en" or "de") for human-readable text; the same data is always returned as structured JSON too.',
-      inputSchema: { variant: z.enum(['cv', 'resume']), format: formatSchema, locale: localeSchema },
+      description: 'Read the content visible in the compact or full view. Pass format "markdown" (with optional locale "en" or "de") for human-readable text; the same data is always returned as structured JSON too.',
+      inputSchema: { view: viewSchema, format: formatSchema, locale: localeSchema },
       outputSchema: { sections: z.array(z.unknown()) },
       annotations: { readOnlyHint: true }
-    }, async ({ variant, format, locale }) => {
-      const data = projectDocument((await store.read()).data, variant);
+    }, async ({ view, format, locale }) => {
+      const data = projectDocument((await store.read()).data, view);
       return result(data, format === 'markdown' ? renderMarkdown(data, locale ?? 'en') : undefined);
     });
     server.registerTool('list_sections', {
@@ -94,21 +95,21 @@ export function mountMcp(app, { storage, store, requireAdmin }) {
       })) });
     });
     server.registerTool('get_section', {
-      description: 'Read one section by id with the current revision. Pass variant to read it as filtered for CV or resume. Pass format "markdown" (with optional locale "en" or "de") for human-readable text; the same data is always returned as structured JSON too.',
-      inputSchema: { sectionId: z.string().min(1), variant: z.enum(['cv', 'resume']).optional(), format: formatSchema, locale: localeSchema },
+      description: 'Read one section by id with the current revision. Pass view to read it as filtered for the compact or full view. Pass format "markdown" (with optional locale "en" or "de") for human-readable text; the same data is always returned as structured JSON too.',
+      inputSchema: { sectionId: z.string().min(1), view: viewSchema.optional(), format: formatSchema, locale: localeSchema },
       outputSchema: { revision: z.string(), section: z.unknown() },
       annotations: { readOnlyHint: true }
-    }, async ({ sectionId, variant, format, locale }) => {
+    }, async ({ sectionId, view, format, locale }) => {
       const { data, revision } = await store.read();
       const section = data.sections.find(candidate => candidate.id === sectionId);
       if (!section) return failure(`Section "${sectionId}" not found. Available: ${data.sections.map(s => s.id).join(', ') || '(none)'}`);
-      const resolved = variant ? projectDocument({ sections: [section] }, variant).sections[0] : section;
-      if (!resolved) return failure(`Section "${sectionId}" is not visible in the "${variant}" variant`);
+      const resolved = view ? projectDocument({ sections: [section] }, view).sections[0] : section;
+      if (!resolved) return failure(`Section "${sectionId}" is not visible in the "${view}" view`);
       const body = { revision, section: resolved };
       return result(body, format === 'markdown' ? renderMarkdown({ sections: [resolved] }, locale ?? 'en') : undefined);
     });
     server.registerTool('replace_document', {
-      description: 'Save the entire shared document, including additions, edits, deletions, order and visibility. Requires the revision from any read; stale revisions are rejected with the current revision. Omitted visibility defaults to both. Prefer put_section, put_item or patch_document for small changes.',
+      description: 'Save the entire shared document, including additions, edits, deletions, order and visibility. Requires the revision from any read; stale revisions are rejected with the current revision. Omitted visibility defaults to all. Prefer put_section, put_item or patch_document for small changes.',
       inputSchema: { data: documentSchema, revision: z.string() },
       outputSchema: { data: documentSchema, revision: z.string() }
     }, async ({ data, revision }) => {

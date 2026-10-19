@@ -117,7 +117,7 @@ function sectionCaption(section) {
   return `${visibilityLabel(section.visibility)} · ${count} ${section.type === 'info' ? (count === 1 ? 'row' : 'rows') : (count === 1 ? 'entry' : 'entries')}`;
 }
 
-function visibilityLabel(value) { return { cv: 'CV', resume: 'Resume', both: 'Both' }[value] || 'Both'; }
+function visibilityLabel(value) { return value === 'full' ? 'Full view only' : 'Always'; }
 
 function formatBytes(bytes) {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return '';
@@ -127,12 +127,12 @@ function formatBytes(bytes) {
 }
 
 function visibilityControl(node, onChange, field) {
-  const label = h('label', { className: 'ed-visibility' }, 'Show in ');
+  const label = h('label', { className: 'ed-visibility' }, 'Show: ');
   const select = h('select', { className: 'ed-input', 'aria-label': field ? `${field} visibility` : 'Visibility' });
-  for (const [value, title] of [['both', 'Both'], ['cv', 'CV'], ['resume', 'Resume']]) {
+  for (const [value, title] of [['all', 'Always'], ['full', 'Full view only']]) {
     select.appendChild(h('option', { value }, title));
   }
-  select.value = (field ? node.fieldVisibility?.[field] : node.visibility) || 'both';
+  select.value = (field ? node.fieldVisibility?.[field] : node.visibility) || 'all';
   select.addEventListener('change', () => {
     if (field) { node.fieldVisibility ||= {}; node.fieldVisibility[field] = select.value; }
     else node.visibility = select.value;
@@ -192,7 +192,7 @@ function renderInfoEditor(section, onDataChange) {
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
       className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
-        rows.push({ visibility: 'both', label: { en: '', de: '' }, value: { en: '', de: '' } });
+        rows.push({ visibility: 'all', label: { en: '', de: '' }, value: { en: '', de: '' } });
         section.rows = rows;
         onDataChange();
         rebuildList();
@@ -215,7 +215,7 @@ function renderHighlights(highlights, onDataChange, label = 'Highlights / Bullet
       row.appendChild(h('button', { className: 'ed-btn ed-btn--danger', onClick: () => { highlights.splice(index, 1); onDataChange(); rebuild(); } }, 'Remove'));
       wrap.appendChild(row);
     });
-    wrap.appendChild(h('button', { className: 'ed-btn', onClick: () => { highlights.push({ text: { en: '', de: '' }, visibility: 'both' }); onDataChange(); rebuild(); } }, label === 'Tags' ? '+ Add Tag' : '+ Add Bullet'));
+    wrap.appendChild(h('button', { className: 'ed-btn', onClick: () => { highlights.push({ text: { en: '', de: '' }, visibility: 'all' }); onDataChange(); rebuild(); } }, label === 'Tags' ? '+ Add Tag' : '+ Add Bullet'));
   }
   rebuild();
   return wrap;
@@ -272,7 +272,7 @@ function renderEntriesEditor(section, onDataChange) {
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
       className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
-        items.push({ visibility: 'both', heading: { en: '', de: '' }, subheading: { en: '', de: '' }, info: { en: '', de: '' }, subinfo: { en: '', de: '' }, highlights: [] });
+        items.push({ visibility: 'all', heading: { en: '', de: '' }, subheading: { en: '', de: '' }, info: { en: '', de: '' }, subinfo: { en: '', de: '' }, highlights: [] });
         section.items = items;
         onDataChange();
         rebuildList();
@@ -330,7 +330,7 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
       row.appendChild(h('button', { className: 'ed-item-action-btn ed-item-action-btn--danger', 'aria-label': 'Remove author', onClick: () => { pub.authors.splice(ai, 1); onDataChange(); rebuildAuthors(); } }, '✕'));
       authList.appendChild(row);
     });
-    authList.appendChild(h('button', { className: 'ed-btn', onClick: () => { pub.authors.push({ name: '', bold: false, visibility: 'both' }); onDataChange(); rebuildAuthors(); } }, '+ Author'));
+    authList.appendChild(h('button', { className: 'ed-btn', onClick: () => { pub.authors.push({ name: '', bold: false, visibility: 'all' }); onDataChange(); rebuildAuthors(); } }, '+ Author'));
   }
   rebuildAuthors();
   authGroup.appendChild(authList);
@@ -363,7 +363,7 @@ function renderPubEditor(section, onDataChange) {
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
       className: 'ed-btn', style: 'margin-top:10px', onClick: () => {
-        items.push({ visibility: 'both', authors: [{ name: '', bold: true, visibility: 'both' }], year: '', title: { en: '', de: '' }, institution: { en: '', de: '' } });
+        items.push({ visibility: 'all', authors: [{ name: '', bold: true, visibility: 'all' }], year: '', title: { en: '', de: '' }, institution: { en: '', de: '' } });
         section.items = items;
         onDataChange();
         rebuildList();
@@ -592,7 +592,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
   function renderApiKeys() {
     const wrap = h('div', { className: 'ed-settings-page' });
     wrap.appendChild(h('header', { className: 'ed-page-heading' }, h('h1', {}, 'API Keys'),
-      h('p', {}, 'Connect your AI tools to your CV and resume. Each key can read and edit all content.')));
+      h('p', {}, 'Connect your AI tools to your resume. Each key can read and edit all content.')));
     const createPanel = h('section', { className: 'ed-panel' }, h('h2', {}, 'Create a key'),
       h('p', { className: 'ed-help' }, 'Give each connection its own name so you can revoke it later.'));
     const name = h('input', { id: 'ed-key-name', className: 'ed-input', placeholder: 'e.g. Web terminal', maxlength: '100', required: '' });
@@ -782,7 +782,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     addWrap.appendChild(h('button', {
       className: 'ed-btn', 'aria-label': 'Add section', onClick: () => {
         const type = typeSel.value;
-        const newSec = { visibility: 'both', id: 'new_' + Date.now(), title: { en: 'New Section', de: 'Neuer Abschnitt' }, open: false, type };
+        const newSec = { visibility: 'all', id: 'new_' + Date.now(), title: { en: 'New Section', de: 'Neuer Abschnitt' }, open: false, type };
         if (type === 'info') newSec.rows = [];
         else newSec.items = [];
         sections().push(newSec);
@@ -837,7 +837,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
 
       const sectionTitle = h('h1', {}, loc(sec.title, 'en') || 'Untitled section');
       secHeader.appendChild(sectionTitle);
-      secHeader.appendChild(h('p', { className: 'ed-help' }, 'Choose where this section appears. Its visibility also applies to every item inside.'));
+      secHeader.appendChild(h('p', { className: 'ed-help' }, 'Choose whether this section appears in the compact view or only in the full view. Its visibility also applies to every item inside.'));
 
       // ID field
       const idWrap = h('div', { style: 'display:flex;align-items:center;gap:6px;' });

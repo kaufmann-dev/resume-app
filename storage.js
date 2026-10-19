@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import session from 'express-session';
 import { z } from 'zod';
-import { documentSchema, mergeDocuments } from './document-store.js';
+import { documentSchema } from './document-store.js';
 
 const passcodesSchema = z.array(z.object({ code: z.string().min(1), expires: z.string().optional() }));
 const keysSchema = z.array(z.object({ id: z.string(), name: z.string(), createdAt: z.string(), hash: z.string().regex(/^[a-f0-9]{64}$/) }));
@@ -32,9 +32,7 @@ export function readMigrationData({ baseDirectory, directory = '/data', environm
     const file = find(name);
     return file ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback;
   };
-  const document = documentSchema.parse(find('document.json')
-    ? json('document.json')
-    : mergeDocuments(json('cv.json', { sections: [] }), json('resume.json', { sections: [] })));
+  const document = documentSchema.parse(json('document.json', { sections: [] }));
   const pdf = find('resume.pdf');
   return {
     document,
@@ -42,6 +40,22 @@ export function readMigrationData({ baseDirectory, directory = '/data', environm
     keys: keysSchema.parse(json('api-keys.json', [])),
     pdf: pdf ? { bytes: fs.readFileSync(pdf), updatedAt: fs.statSync(pdf).mtime } : null
   };
+}
+
+// Migration 2: the cv/resume/both visibility model became all/full. Resume-only content has no
+// equivalent, so it stops startup instead of silently appearing in the full view.
+const VISIBILITY_MIGRATION = { both: 'all', cv: 'full' };
+function migrateVisibility(value) {
+  if (value === 'resume') throw new Error('Cannot migrate resume-only visibility; make that content visible in both or remove it');
+  return VISIBILITY_MIGRATION[value] ?? value;
+}
+function convertVisibility(node) {
+  if (Array.isArray(node)) return node.map(convertVisibility);
+  if (!node || typeof node !== 'object') return node;
+  return Object.fromEntries(Object.entries(node).map(([key, value]) => [key,
+    key === 'visibility' ? migrateVisibility(value)
+      : key === 'fieldVisibility' ? Object.fromEntries(Object.entries(value).map(([field, visibility]) => [field, migrateVisibility(visibility)]))
+        : convertVisibility(value)]));
 }
 
 export async function initializeStorage({ pool, ...options }) {
@@ -56,16 +70,24 @@ export async function initializeStorage({ pool, ...options }) {
       CREATE TABLE IF NOT EXISTS app_sessions (sid text PRIMARY KEY, data jsonb NOT NULL, expires_at timestamptz NOT NULL);
       CREATE INDEX IF NOT EXISTS app_sessions_expiry ON app_sessions (expires_at);
     `);
-    if ((await client.query('SELECT version FROM app_migrations WHERE version = 1')).rowCount) return;
-    const data = readMigrationData(options);
-    await client.query('INSERT INTO app_document VALUES (1, $1, $2)', [JSON.stringify(data.document), randomUUID()]);
-    for (const [name, value] of [['passcodes', data.passcodes], ['keys', data.keys]]) {
-      await client.query('INSERT INTO app_collections VALUES ($1, $2)', [name, JSON.stringify(value)]);
+    const completed = new Set((await client.query('SELECT version FROM app_migrations')).rows.map(row => row.version));
+    if (!completed.has(1)) {
+      const data = readMigrationData(options);
+      await client.query('INSERT INTO app_document VALUES (1, $1, $2)', [JSON.stringify(data.document), randomUUID()]);
+      for (const [name, value] of [['passcodes', data.passcodes], ['keys', data.keys]]) {
+        await client.query('INSERT INTO app_collections VALUES ($1, $2)', [name, JSON.stringify(value)]);
+      }
+      if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume.pdf', data.pdf.bytes, data.pdf.updatedAt]);
+      await client.query('INSERT INTO app_migrations (version) VALUES (1)');
     }
-    if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume.pdf', data.pdf.bytes, data.pdf.updatedAt]);
-    await client.query('INSERT INTO app_migrations (version) VALUES (1)');
+    if (!completed.has(2)) {
+      const { rows } = await client.query('SELECT data FROM app_document WHERE id = 1');
+      const document = documentSchema.parse(convertVisibility(rows[0].data));
+      await client.query('UPDATE app_document SET data = $1, revision = $2 WHERE id = 1', [JSON.stringify(document), randomUUID()]);
+      await client.query('INSERT INTO app_migrations (version) VALUES (2)');
+    }
   });
-  console.log('PostgreSQL storage ready; initial data import complete');
+  console.log('PostgreSQL storage ready; migrations complete');
   return createStorage(pool);
 }
 

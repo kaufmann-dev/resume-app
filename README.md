@@ -1,19 +1,16 @@
-# CV/Resume App
+# Resume App
 
-A small personal CV/resume app built with Vite on the frontend and Express on the backend. One deployment serves both `resume.kaufmann.dev` and `cv.kaufmann.dev`, with content filtered from one shared document according to the current hostname.
+A small personal resume app built with Vite on the frontend and Express on the backend. It serves `resume.kaufmann.dev` from one shared document, with a compact view by default and a full view one toolbar click away.
 
 ## Features
 
-- One shared app for both the resume and CV variants
-- Hostname-based visibility filtering via `variant-config.js`
+- Compact and full views of one document, switched from the toolbar or opened directly with `?view=full`
 - App-owned viewer passcodes with OIDC-protected admin/editor access
-- Shared login session across `resume.kaufmann.dev` and `cv.kaufmann.dev`
-- Shared theme and language preferences across both subdomains
+- Theme and language preferences shared across `.kaufmann.dev` subdomains
 - PDF download through the authenticated backend
 - PDF replacement upload from the admin editor
-- Shared content editor with visibility controls for sections, items, fields, bullets, tags, and authors
+- Content editor with visibility controls for sections, items, fields, bullets, tags, and authors
 - Hosted MCP endpoint with API keys managed in admin API Keys
-- Local development fallback to the resume variant
 
 ## Tech Stack
 
@@ -25,11 +22,11 @@ A small personal CV/resume app built with Vite on the frontend and Express on th
 ## Project Structure
 
 ```text
-resume-app-new/
+resume-app/
 |-- server.js           # Express backend server
 |-- error-page.js       # HTML error pages for browser requests
 |-- auth.js             # OIDC and server-side session configuration
-|-- variant-config.js   # Hostname -> variant mapping
+|-- site-config.js      # Production origin and local hostname detection
 |-- index.html          # Frontend entry point
 |-- main.js             # Frontend logic
 |-- editor.js           # Visual editor logic
@@ -47,13 +44,11 @@ resume-app-new/
 |-- package-lock.json
 ```
 
-## Variant Routing
+## Views
 
-- `resume.kaufmann.dev` shows resume-visible content from the shared PostgreSQL document
-- `cv.kaufmann.dev` shows CV-visible content from the shared PostgreSQL document
-- Unknown or local hostnames fall back to the resume variant
-
-That mapping lives in `variant-config.js`.
+- The page opens in the compact view, which hides content marked **Full view only**.
+- The toolbar toggle switches to the full view without reloading and keeps `?view=full` in the URL, so links can open the full view directly.
+- Viewers receive the whole document; the browser projects the selected view.
 
 ## PostgreSQL Persistence
 
@@ -69,15 +64,15 @@ PostgreSQL is the only runtime store. Content and visibility settings use JSONB 
 
 ### Initial import and shared content
 
-On the first startup against a new database, the app imports `document.json`, `passcodes.json`, `api-keys.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without a shared document, the importer merges `cv.json` and `resume.json`, retaining variant visibility and order. Matching content becomes visible in both variants; differing content stays separate.
+On the first startup against a new database, the app imports `document.json`, `passcodes.json`, `api-keys.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
 
-Import validation, schema creation, and the migration record commit together in one transaction. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so revoked keys and deleted content cannot return on restart. Do not delete that record.
+Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so revoked keys and deleted content cannot return on restart. Do not delete that record.
 
 **Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** API keys and viewer passcodes remain valid after import, subject to their existing expiry rules.
 
 For a fresh installation without content files, the app creates an empty document and empty passcode/key lists and imports the repository PDF if available. Log in through OIDC to populate the app. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. Never copy examples over existing production files.
 
-The admin **Content** tab edits one shared list. The sidebar shows visibility and item counts; entry headings expand using the keyboard or pointer. Field visibility sits beside each field label, and bullets use multiline inputs. Choose CV, Resume, or Both for sections, items, rows, authors, bullets, tags, and individual content fields. New content defaults to Both. Hiding a parent hides its descendants, regardless of their visibility. Language selection remains independent of visibility.
+The admin **Content** tab edits one shared list. The sidebar shows visibility and item counts; entry headings expand using the keyboard or pointer. Field visibility sits beside each field label, and bullets use multiline inputs. Choose **Always** or **Full view only** for sections, items, rows, authors, bullets, tags, and individual content fields. New content defaults to Always. Hiding a parent hides its descendants, regardless of their visibility. Language selection remains independent of visibility.
 
 Click **Save** to persist content. Switching tabs retains edits. Saves reject stale revisions from another editor or MCP client. **Reload** fetches the latest content, discarding local edits. Passcodes and API-key changes save immediately.
 
@@ -85,12 +80,12 @@ Click **Save** to persist content. Switching tabs retains edits. Saves reject st
 
 Create a named key in admin **API Keys** and copy it when displayed; only its hash is stored. Use the Copy button to copy a newly created key or the connection URL. The page lists named keys with creation dates; revoke keys there for immediate effect. Keys grant read/write access to all document content, but cannot manage passcodes or keys. Viewer passcodes and browser sessions cannot authenticate MCP requests.
 
-Connect with Streamable HTTP at `https://resume.kaufmann.dev/api/mcp` (or the CV hostname) and the header `Authorization: Bearer YOUR_API_KEY`. Requests are stateless POSTs; GET and DELETE return 405. Available tools:
+Connect with Streamable HTTP at `https://resume.kaufmann.dev/api/mcp` and the header `Authorization: Bearer YOUR_API_KEY`. Requests are stateless POSTs; GET and DELETE return 405. Available tools:
 
 - `list_sections`: read section summaries (id, type, title, visibility, count) and the revision.
-- `get_section`: read one section by id, optionally filtered for a variant or rendered as Markdown (`format: "markdown"`, `locale: "en" | "de"`).
+- `get_section`: read one section by id, optionally filtered for a view (`view: "compact" | "full"`) or rendered as Markdown (`format: "markdown"`, `locale: "en" | "de"`).
 - `get_document`: read all shared data and its revision.
-- `preview_document`: read the filtered CV or resume, as JSON or Markdown (`format`, `locale`).
+- `preview_document`: read the compact or full view (`view`), as JSON or Markdown (`format`, `locale`).
 - `put_section`: create or replace one whole section, with optional positioning.
 - `delete_section`: delete one section by id.
 - `put_item`: append or replace one row/item inside a section.
@@ -100,7 +95,7 @@ Connect with Streamable HTTP at `https://resume.kaufmann.dev/api/mcp` (or the CV
 
 Every tool returns typed `structuredContent` alongside its human-readable text; Markdown reads keep the same structured JSON so a follow-up edit needs no second read. Every write tool needs the revision from any read; stale revisions are rejected with the current revision. Patch paths are JSON Pointers below the document root, e.g. `/sections/0/title/en` or `/sections/1/items/0/highlights/-` to append a bullet. Use `test` operations or `dryRun` to verify before committing.
 
-Every section, entry, row, author, bullet, and tag has `visibility: "cv" | "resume" | "both"`, defaulting to `"both"` when omitted. Bullets and tags use `{ "text": "Content", "visibility": "both" }`; text may also be localized as `{ "en": "…", "de": "…" }`. Optional `fieldVisibility` controls individual fields, e.g. `{ "info": "cv" }`; unspecified fields are visible in Both. The MCP tool schema describes the full document structure.
+Every section, entry, row, author, bullet, and tag has `visibility: "all" | "full"`, defaulting to `"all"` when omitted; `"full"` content appears only in the full view. Bullets and tags use `{ "text": "Content", "visibility": "all" }`; text may also be localized as `{ "en": "…", "de": "…" }`. Optional `fieldVisibility` controls individual fields, e.g. `{ "info": "full" }`; unspecified fields are always visible. The MCP tool schema describes the full document structure.
 
 ### Example passcode import file (`passcodes.json`)
 ```json
@@ -113,7 +108,7 @@ Notes:
 
 - **Viewer passcodes**: New viewer passcodes require an `expires` date. PostgreSQL is checked on every authenticated request, so expiry, edits, and deletion take effect immediately. Failed login attempts are limited to five per 15 minutes for each proxy-derived client IP; valid passcodes bypass the limiter.
 - **Admin access**: The OIDC provider's access policy is the only admin admission control. OIDC admins can manage viewer passcodes in the editor.
-- **Cookies**: Authentication uses an opaque `HttpOnly` server-side session cookie. Theme and language preferences remain separate and are also shared across subdomains.
+- **Cookies**: Authentication uses an opaque host-only server-side session cookie that is `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS; sessions have a 24-hour sliding idle limit and a seven-day absolute limit. Theme and language preferences remain separate and are shared across `.kaufmann.dev` subdomains.
 
 ## Authentication Setup
 
@@ -127,16 +122,15 @@ Viewer login uses app-owned passcodes from PostgreSQL; admin login uses confiden
 
 Token exchange uses `client_secret_post` for token endpoint authentication (`client_id` and `client_secret` as form parameters).
 
-| Environment variable    |            Required            | Purpose                                                                |
-| ----------------------- | :----------------------------: | ---------------------------------------------------------------------- |
-| `DATABASE_URL`          |              Yes               | PostgreSQL connection string for all persistent state.                 |
-| `OIDC_ISSUER_URL`       |              Yes               | Provider issuer URL used for discovery.                                |
-| `OIDC_CLIENT_ID`        |              Yes               | Confidential client identifier.                                        |
-| `OIDC_CLIENT_SECRET`    |              Yes               | Confidential client secret used at token exchange.                     |
-| `OIDC_CALLBACK_URL`     |              Yes               | Exact callback URL; must end in `/auth/callback`.                      |
-| `OIDC_POST_LOGOUT_URL`  |              Yes               | Post-logout redirect URL; must be an origin.                           |
-| `SESSION_SECRET`        |              Yes               | Session cookie signing secret (at least 32 characters).                |
-| `SESSION_COOKIE_DOMAIN` | Production only (optional dev) | Production required value `.kaufmann.dev`; omit for local development. |
+| Environment variable   | Required | Purpose                                                 |
+| ---------------------- | :------: | ------------------------------------------------------- |
+| `DATABASE_URL`         |   Yes    | PostgreSQL connection string for all persistent state.  |
+| `OIDC_ISSUER_URL`      |   Yes    | Provider issuer URL used for discovery.                 |
+| `OIDC_CLIENT_ID`       |   Yes    | Confidential client identifier.                         |
+| `OIDC_CLIENT_SECRET`   |   Yes    | Confidential client secret used at token exchange.      |
+| `OIDC_CALLBACK_URL`    |   Yes    | Exact callback URL; must end in `/auth/callback`.       |
+| `OIDC_POST_LOGOUT_URL` |   Yes    | Post-logout redirect URL; must be an origin.            |
+| `SESSION_SECRET`       |   Yes    | Session cookie signing secret (at least 32 characters). |
 
 ## Local Development
 
@@ -166,8 +160,7 @@ The frontend usually runs at `http://localhost:5173`.
 In local development:
 
 - The frontend talks to `http://localhost:3001`.
-- Unknown or local hostnames default to the resume variant.
-- Admin access requires a provider client with localhost callback and post-logout URLs plus the required Authentication Setup variables. Leave `SESSION_COOKIE_DOMAIN` unset.
+- Admin access requires a provider client with localhost callback and post-logout URLs plus the required Authentication Setup variables.
 - Session cookies stay local to your localhost environment.
 - Theme and language preferences still persist through cookies.
 
@@ -176,16 +169,16 @@ In local development:
 - **Build Pack:** Nixpacks; `nixpacks.toml` starts `node server.js`.
 - **Base Directory:** `/`. This is a server application, not a static site.
 - **Persistent Storage:** PostgreSQL owns persistent state. Keep `/data` attached for the first import, then remove the app volume after verification. The PostgreSQL service needs its own persistent storage and backups.
-- **Required environment:** all production authentication variables in Authentication Setup (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_CALLBACK_URL`, `OIDC_POST_LOGOUT_URL`, `SESSION_SECRET`, `SESSION_COOKIE_DOMAIN`), plus `DATABASE_URL` and `NODE_ENV=production`.
+- **Required environment:** all production authentication variables in Authentication Setup (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_CALLBACK_URL`, `OIDC_POST_LOGOUT_URL`, `SESSION_SECRET`), plus `DATABASE_URL` and `NODE_ENV=production`.
 - **Optional environment:** `PORT` defaults to `3001`.
-- **Domains:** `https://resume.kaufmann.dev, https://cv.kaufmann.dev`.
+- **Domains:** `https://resume.kaufmann.dev`.
 
 ### Migrating the existing deployment
 
 1. Back up the existing `/data` volume. Confirm it contains the latest document, passcodes, API keys, and uploaded PDF. Keep it mounted at `/data` for the first deployment of this commit; a read-only mount is sufficient. For older deployments with individual mounts or `DATA_DIRECTORY`, keep those sources attached for import.
 2. Provision a dedicated PostgreSQL database and add **`DATABASE_URL`** to the app's runtime environment. Keep the authentication variables. Pause edits and stop the old app before starting the new version so it cannot write to files after the import snapshot.
-3. Redeploy this commit. Startup creates the schema and imports automatically; no pre/post-deployment command is needed. A failed import leaves no partial database state. Check the logs for `PostgreSQL storage ready; initial data import complete`.
-4. Log in again and verify both CV and resume content, passcodes, existing MCP API keys, and the PDF. Confirm an edit survives a restart.
+3. Redeploy this commit. Startup creates the schema and imports automatically; no pre/post-deployment command is needed. A failed import leaves no partial database state. Check the logs for `PostgreSQL storage ready; migrations complete`.
+4. Log in again and verify the compact and full views, passcodes, existing MCP API keys, and the PDF. Confirm an edit survives a restart.
 5. Remove the app's `/data` mount and any old file/session mounts, `DATA_DIRECTORY`, and `SESSION_STORE_PATH`, then redeploy. Keep the source backup until satisfied with the migration. The app now needs only the database connection for persistence.
 
 Back up PostgreSQL after migration, including every `app_*` table. The old files are a pre-migration snapshot and will not reflect subsequent edits. To roll back to the old application, stop the new app and restore the pre-migration file backup; changes made in PostgreSQL must be exported separately or they will be absent from that rollback. Only share a database between deployments that should share content and credentials.
@@ -294,7 +287,7 @@ Example shape:
 
 ```nginx
 server {
-    server_name resume.kaufmann.dev cv.kaufmann.dev;
+    server_name resume.kaufmann.dev;
 
     root /var/www/cv-resume-app/dist;
     index index.html;
@@ -331,20 +324,13 @@ The current implementation:
 
 - validates the current admin or viewer session before download
 - re-checks viewer passcode revocation and expiry
-- reuses the shared session cookie when available
+- reuses the session cookie when available
 - serves PDF bytes from PostgreSQL through the Express download endpoint
 - triggers the browser download from the frontend with a normal navigation to `/api/download`
 
-## Shared sessions across subdomains
+## Proxy headers and origins
 
-Authentication is intentionally shared between:
-
-- `resume.kaufmann.dev`
-- `cv.kaufmann.dev`
-
-That works because `SESSION_COOKIE_DOMAIN=.kaufmann.dev` scopes the opaque session cookie to both hosts. The cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS; authentication sessions have a 24-hour sliding idle limit and a seven-day absolute limit.
-
-Credentialed browser requests are accepted only from `https://resume.kaufmann.dev`, `https://cv.kaufmann.dev`, and localhost development origins.
+Credentialed browser requests are accepted only from `https://resume.kaufmann.dev` and localhost development origins.
 
 In production, make sure nginx forwards these headers to the Node app:
 
@@ -353,7 +339,7 @@ In production, make sure nginx forwards these headers to the Node app:
 - `X-Forwarded-Proto`
 - `X-Forwarded-For`
 
-Without those forwarded headers, hostname-based variant selection and secure cookie behavior can be wrong.
+Without those forwarded headers, secure cookie behavior and callback URLs can be wrong.
 
 ## Scripts
 

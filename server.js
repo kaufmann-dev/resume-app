@@ -1,7 +1,6 @@
 import { createPool, initializeStorage, PostgresSessionStore } from './storage.js';
 import { asyncHandler } from './async-handler.js';
 import { createDocumentStore } from './document-store.js';
-import { projectDocument } from './document-model.js';
 import { mountMcp } from './mcp.js';
 import { renderErrorPage } from './error-page.js';
 import express from 'express';
@@ -20,22 +19,12 @@ import {
   regenerateSession,
   saveSession
 } from './auth.js';
-import {
-  DEFAULT_VARIANT_ID,
-  VARIANT_CONFIGS,
-  getVariantConfigById,
-  isLocalDevelopmentHostname,
-  normalizeHostname,
-  resolveVariantId
-} from './variant-config.js';
+import { SITE_ORIGIN, isLocalDevelopmentHostname } from './site-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DOCUMENT_VARIANT_IDS = new Set(Object.keys(VARIANT_CONFIGS));
-const PRODUCTION_BROWSER_ORIGINS = new Set([
-  'https://resume.kaufmann.dev',
-  'https://cv.kaufmann.dev'
-]);
+const PDF_NAME = 'resume.pdf';
+const PDF_DOWNLOAD_NAME = 'David_Kaufmann_Resume.pdf';
 export const PASSCODE_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 export const PASSCODE_RATE_LIMIT_MAX_FAILURES = 5;
 
@@ -44,7 +33,7 @@ function isAllowedBrowserOrigin(origin) {
     const candidate = new URL(origin);
     const normalizedOrigin = candidate.origin;
 
-    if (PRODUCTION_BROWSER_ORIGINS.has(normalizedOrigin)) {
+    if (normalizedOrigin === SITE_ORIGIN) {
       return true;
     }
 
@@ -81,31 +70,6 @@ function validateViewerPasscode(passcodes, passcode, now) {
   return { ok: true };
 }
 
-function resolveVariantIdFromRequest(request) {
-  const requestedVariant = request.body?.variant ?? request.query?.variant;
-
-  if (typeof requestedVariant === 'string' && DOCUMENT_VARIANT_IDS.has(requestedVariant)) {
-    return requestedVariant;
-  }
-
-  const hostnameCandidates = [
-    request.headers['x-forwarded-host'],
-    request.headers.origin,
-    request.headers.referer,
-    request.headers.host
-  ];
-
-  for (const candidate of hostnameCandidates) {
-    const hostname = normalizeHostname(candidate);
-
-    if (hostname) {
-      return resolveVariantId(hostname);
-    }
-  }
-
-  return DEFAULT_VARIANT_ID;
-}
-
 function getSafeReturnUrl(request, authConfig) {
   const requestedReturnUrl = typeof request.query.returnTo === 'string'
     ? request.query.returnTo
@@ -114,8 +78,7 @@ function getSafeReturnUrl(request, authConfig) {
   if (requestedReturnUrl) {
     try {
       const candidate = new URL(requestedReturnUrl);
-      const knownProductionHostname = Object.values(VARIANT_CONFIGS)
-        .some((variant) => variant.hostnames.includes(candidate.hostname.toLowerCase()));
+      const knownProductionHostname = candidate.hostname.toLowerCase() === new URL(SITE_ORIGIN).hostname;
       const validProtocol = knownProductionHostname
         ? candidate.protocol === 'https:'
         : ['http:', 'https:'].includes(candidate.protocol);
@@ -281,12 +244,10 @@ export function createApp({
   }
 
   async function buildSessionResponse(request) {
-    const variantId = resolveVariantIdFromRequest(request);
     const document = await store.read();
     const response = {
       success: true,
-      variant: variantId,
-      data: projectDocument(document.data, variantId),
+      data: document.data,
       isAdmin: request.authContext.kind === 'admin'
     };
 
@@ -407,13 +368,7 @@ export function createApp({
       return;
     }
 
-    const variant = getVariantConfigById(resolveVariantIdFromRequest(request));
-
-    if (!variant.pdfFile) {
-      return response.status(404).send('PDF not configured');
-    }
-
-    const pdf = await storage.readPdf(variant.pdfFile);
+    const pdf = await storage.readPdf(PDF_NAME);
 
     if (!pdf) {
       return response.status(404).send('PDF not found');
@@ -426,15 +381,14 @@ export function createApp({
       'X-Content-Type-Options': 'nosniff'
     });
 
-    return response.attachment(variant.pdfDownloadName).type('application/pdf').send(pdf.bytes);
+    return response.attachment(PDF_DOWNLOAD_NAME).type('application/pdf').send(pdf.bytes);
   }));
 
   app.get('/api/pdf', asyncHandler(async (request, response) => {
     if (!requireAdmin(request, response)) return;
-    const variant = getVariantConfigById(resolveVariantIdFromRequest(request));
-    const pdf = await storage.readPdf(variant.pdfFile);
-    if (!pdf) return response.json({ file: variant.pdfFile, exists: false });
-    return response.json({ file: variant.pdfFile, exists: true, size: pdf.bytes.length, updatedAt: pdf.updatedAt.toISOString() });
+    const pdf = await storage.readPdf(PDF_NAME);
+    if (!pdf) return response.json({ file: PDF_NAME, exists: false });
+    return response.json({ file: PDF_NAME, exists: true, size: pdf.bytes.length, updatedAt: pdf.updatedAt.toISOString() });
   }));
 
   app.post('/api/pdf',
@@ -447,9 +401,8 @@ export function createApp({
       if (request.body.subarray(0, 5).toString('latin1') !== '%PDF-') {
         return response.status(400).json({ error: 'Uploaded file is not a valid PDF' });
       }
-      const variant = getVariantConfigById(resolveVariantIdFromRequest(request));
-      const metadata = await storage.writePdf(variant.pdfFile, request.body);
-      return response.json({ success: true, file: variant.pdfFile, ...metadata });
+      const metadata = await storage.writePdf(PDF_NAME, request.body);
+      return response.json({ success: true, file: PDF_NAME, ...metadata });
     }));
 
   app.get('/api/data', asyncHandler(async (request, response) => {

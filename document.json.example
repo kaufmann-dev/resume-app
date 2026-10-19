@@ -1,7 +1,7 @@
 {
   "sections": [
     {
-      "visibility": "cv",
+      "visibility": "all",
       "id": "personal",
       "title": {
         "en": "Personal Information",
@@ -11,7 +11,7 @@
       "type": "info",
       "rows": [
         {
-          "visibility": "cv",
+          "visibility": "all",
           "label": {
             "en": "Location",
             "de": "Wohnort"
@@ -24,7 +24,7 @@
       ]
     },
     {
-      "visibility": "cv",
+      "visibility": "all",
       "id": "education",
       "title": {
         "en": "Education",
@@ -34,7 +34,7 @@
       "type": "entries",
       "items": [
         {
-          "visibility": "cv",
+          "visibility": "all",
           "heading": {
             "en": "University Name",
             "de": "Universität Name"
@@ -57,14 +57,14 @@
                 "en": "Highlight 1",
                 "de": "Highlight 1"
               },
-              "visibility": "cv"
+              "visibility": "full"
             }
           ]
         }
       ]
     },
     {
-      "visibility": "resume",
+      "visibility": "all",
       "id": "experience",
       "title": {
         "en": "Experience",
@@ -74,7 +74,7 @@
       "type": "entries",
       "items": [
         {
-          "visibility": "resume",
+          "visibility": "all",
           "heading": {
             "en": "Company Name",
             "de": "Firmenname"
@@ -97,7 +97,7 @@
                 "en": "Key achievement",
                 "de": "Wichtiger Erfolg"
               },
-              "visibility": "resume"
+              "visibility": "all"
             }
           ]
         }

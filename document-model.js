@@ -60,14 +60,16 @@ export function renderMarkdown(document, locale = 'en') {
 }
 
 // A parent's visibility always bounds the visibility of its descendants.
-export function projectDocument(document, variant) {
+// The compact view drops content marked 'full'; the full view keeps everything.
+export function projectDocument(document, view) {
+  const visible = visibility => view === 'full' || visibility !== 'full';
   function project(value) {
-    if (Array.isArray(value)) return value.filter(v => !v?.visibility || v.visibility === 'both' || v.visibility === variant).map(project);
+    if (Array.isArray(value)) return value.filter(v => visible(v?.visibility)).map(project);
     if (!value || typeof value !== 'object') return value;
     if ('text' in value && 'visibility' in value) return project(value.text);
     return Object.fromEntries(Object.entries(value)
       .filter(([key]) => !['visibility', 'fieldVisibility'].includes(key))
-      .filter(([key]) => !value.fieldVisibility?.[key] || ['both', variant].includes(value.fieldVisibility[key]))
+      .filter(([key]) => visible(value.fieldVisibility?.[key]))
       .map(([key, child]) => [key, project(child)]));
   }
   return project(document);
