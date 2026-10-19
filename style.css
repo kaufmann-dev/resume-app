@@ -316,7 +316,7 @@ header {
 .sec {
   margin-top: 24px;
   padding-top: 24px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid color-mix(in oklch, var(--border), var(--t1) 15%);
   scroll-margin-top: 24px;
 }
 
@@ -606,23 +606,18 @@ body.is-auth-view #legal-footer {
   }
 
   header {
-    padding-top: 36px;
+    padding-top: 12px;
   }
 
   .hdr-top {
     flex-direction: column;
     align-items: flex-start;
-    gap: 16px;
+    gap: 8px;
   }
 
   .toolbar-wrap {
     order: -1;
-    margin: 0 0 0 -10px;
-  }
-
-  .toolbar {
-    right: auto;
-    left: 0;
+    align-self: flex-end;
   }
 
   .info-grid {
