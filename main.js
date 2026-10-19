@@ -171,13 +171,13 @@ function mkEntry(item) {
   const bottomRightMeta = !useInlineMeta && hasSubinfo ? `<span class="entry-date">${subinfo}</span>` : '';
   const showSecondRow = hasSubheading || Boolean(bottomRightMeta);
 
-  return `<div class="entry"><div class="e-line"></div><div class="e-body">
+  return `<div class="entry">
     ${mobMeta ? `<div class="e-mob">${mobMeta}</div>` : ''}
     <div class="e-r1"><span class="entry-title">${heading}</span>${useInlineMeta ? inlineMeta : topRightMeta}</div>
     ${showSecondRow ? `<div class="e-r2">${hasSubheading ? `<span class="entry-subtitle">${subheading}</span>` : ''}${bottomRightMeta}</div>` : ''}
     ${highlights.length ? `<ul>${highlights.map((highlight) => `<li>${highlight}</li>`).join('')}</ul>` : ''}
     ${item.tags?.length ? `<div class="tags">${item.tags.map((tag) => `<span class="tag">${localize(tag)}</span>`).join('')}</div>` : ''}
-  </div></div>`;
+  </div>`;
 }
 
 function sectionAnchor(section) {
