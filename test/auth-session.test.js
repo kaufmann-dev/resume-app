@@ -95,7 +95,7 @@ async function createFixture(t, authConfigOverrides = {}) {
 
 function sessionCookie(response) {
   return response.headers['set-cookie']?.find((cookie) => (
-    cookie.startsWith('cv_resume_session=')
+    cookie.startsWith('resume_session=')
   ));
 }
 
@@ -297,6 +297,19 @@ test('absolute lifetime ends active sessions at seven days', async (t) => {
 
   fixture.now = createdAt + ABSOLUTE_SESSION_MS;
   await viewer.get('/api/session').expect(401);
+});
+
+test('a leftover cookie from the former shared-domain session does not shadow a new login', async (t) => {
+  const fixture = await createFixture(t);
+  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
+
+  const login = await request(fixture.app).get('/auth/login');
+  const transactionCookie = sessionCookie(login).split(';')[0];
+  // Browsers send the older .kaufmann.dev cookie first, and the cookie parser keeps the first value of a name.
+  const callback = await request(fixture.app)
+    .get('/auth/callback?code=code-value&state=state-value')
+    .set('Cookie', `cv_resume_session=s%3Aformer-session.signature; ${transactionCookie}`);
+  assert.equal(callback.status, 303);
 });
 
 test('viewer logout is local and does not call the provider', async (t) => {

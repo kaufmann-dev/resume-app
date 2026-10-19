@@ -195,7 +195,7 @@ export async function createOidcService(config, oidcClient = oidc) {
 
 export function createSessionMiddleware(config, store) {
   return session({
-    name: 'cv_resume_session',
+    name: 'resume_session',
     secret: config.sessionSecret,
     store,
     resave: false,
