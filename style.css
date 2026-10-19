@@ -251,10 +251,11 @@ header {
 
 
 
+/* The rule sits centered between sections: the last block of a section adds no trailing space. */
 .sec {
-  margin-top: 48px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  margin-top: 32px;
+  padding-top: 32px;
+  border-top: 1px solid var(--t1);
   scroll-margin-top: 24px;
 }
 
@@ -306,8 +307,8 @@ header {
   font-weight: 600;
 }
 
-.sec-body {
-  padding-bottom: 4px;
+.sec-body > :last-child {
+  padding-bottom: 0;
 }
 
 .entry {
@@ -425,7 +426,7 @@ header {
   display: grid;
   grid-template-columns: 150px 1fr;
   gap: 8px 20px;
-  padding: 2px 0 6px;
+  padding-top: 2px;
 }
 
 .il {
@@ -548,7 +549,8 @@ body.is-auth-view #legal-footer {
   }
 
   .sec {
-    margin-top: 40px;
+    margin-top: 24px;
+    padding-top: 24px;
   }
 
   .hdr-top {
