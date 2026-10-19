@@ -32,7 +32,7 @@ test('migration imports content, keys, passcodes and exact PDF bytes once, leavi
   fs.writeFileSync(path.join(directory, 'document.json'), 'broken');
   await initializeStorage(options);
   assert.deepEqual(await storage.readCollection('keys'), []);
-  assert.equal((await pool.query('SELECT * FROM app_migrations')).rowCount, 1);
+  assert.equal((await pool.query('SELECT * FROM app_migrations')).rowCount, 2);
 });
 
 test('volume data takes precedence over old paths, including empty key lists', async t => {
@@ -48,13 +48,43 @@ test('volume data takes precedence over old paths, including empty key lists', a
 
 test('malformed import rolls back the entire migration and retries successfully', async t => {
   const { directory, options, pool } = await fixture(t);
-  write(directory, 'cv.json', { sections: [{ id: 'education', title: 'Education', type: 'entries', items: [] }] });
+  write(directory, 'document.json', { sections: [{ id: 'education', title: 'Education', type: 'entries', items: [], visibility: 'full' }] });
   fs.writeFileSync(path.join(directory, 'passcodes.json'), 'broken');
   await assert.rejects(() => initializeStorage(options));
   assert.equal((await pool.query("SELECT to_regclass('app_document') AS table_name")).rows[0].table_name, null);
   write(directory, 'passcodes.json', []);
   await initializeStorage(options);
-  assert.equal((await createDocumentStore(pool).read()).data.sections[0].visibility, 'cv');
+  assert.equal((await createDocumentStore(pool).read()).data.sections[0].visibility, 'full');
+});
+
+const legacyDocument = visibility => ({ sections: [{ id: 'work', title: 'Work', type: 'entries', visibility: 'both', items: [
+  { heading: 'Job', info: 'Vienna', visibility: 'both', fieldVisibility: { info: 'cv' }, highlights: [{ text: 'Detail', visibility }] }
+] }] });
+async function storeLegacyDocument(pool, document) {
+  await pool.query('UPDATE app_document SET data = $1 WHERE id = 1', [JSON.stringify(document)]);
+  await pool.query('DELETE FROM app_migrations WHERE version = 2');
+}
+
+test('visibility migration converts both and cv to all and full once', async t => {
+  const { options, pool } = await fixture(t);
+  await initializeStorage(options);
+  await storeLegacyDocument(pool, legacyDocument('cv'));
+  await initializeStorage(options);
+  const section = (await createDocumentStore(pool).read()).data.sections[0];
+  assert.equal(section.visibility, 'all');
+  assert.equal(section.items[0].visibility, 'all');
+  assert.deepEqual(section.items[0].fieldVisibility, { info: 'full' });
+  assert.equal(section.items[0].highlights[0].visibility, 'full');
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2]);
+});
+
+test('visibility migration rejects resume-only content and leaves the document untouched', async t => {
+  const { options, pool } = await fixture(t);
+  await initializeStorage(options);
+  await storeLegacyDocument(pool, legacyDocument('resume'));
+  await assert.rejects(() => initializeStorage(options), /resume-only/);
+  assert.deepEqual((await pool.query('SELECT data FROM app_document')).rows[0].data, legacyDocument('resume'));
+  assert.equal((await pool.query('SELECT * FROM app_migrations WHERE version = 2')).rowCount, 0);
 });
 
 test('concurrent initialization and writes preserve one migration and reject stale saves', async t => {

@@ -19,9 +19,8 @@ async function createMcpFixture(t) {
   const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-resume-mcp-'));
   t.after(() => fs.rmSync(dataDirectory, { recursive: true, force: true }));
   writeJson(dataDirectory, 'passcodes.json', []);
-  writeJson(dataDirectory, 'resume.json', { sections: [] });
-  writeJson(dataDirectory, 'cv.json', { sections: [
-    { id: 'experience', title: 'Experience', type: 'entries', items: [{ heading: 'Job A', highlights: ['Did things'], tags: ['JS'] }] },
+  writeJson(dataDirectory, 'document.json', { sections: [
+    { id: 'experience', title: 'Experience', type: 'entries', visibility: 'full', items: [{ heading: 'Job A', highlights: [{ text: 'Did things' }], tags: [{ text: 'JS' }] }] },
     { id: 'personal', title: 'Personal', type: 'info', rows: [{ label: 'Location', value: 'Berlin' }] },
     { id: 'pubs', title: 'Publications', type: 'pub', items: [{ title: 'Paper', year: 2026, authors: [{ name: 'A. Uthor' }] }] }
   ] });
@@ -29,7 +28,7 @@ async function createMcpFixture(t) {
   const sessionStore = new PostgresSessionStore(storage.pool);
   t.after(() => sessionStore.close());
   const app = createApp({
-    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET, cookieDomain: undefined },
+    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET },
     oidcService: {
       async createAuthorizationRequest() {
         return { authorizationUrl: new URL('https://identity.example/authorize'), codeVerifier: 'v', state: 's', nonce: 'n' };
@@ -88,14 +87,14 @@ test('JSON results also carry the same typed structured content', async t => {
   const listed = await call('list_sections', {});
   assert.equal(listed.isError, false);
   assert.deepEqual(listed.structuredContent, listed.body);
-  const preview = await call('preview_document', { variant: 'cv' });
+  const preview = await call('preview_document', { view: 'full' });
   assert.equal(preview.isError, false);
   assert.deepEqual(preview.structuredContent, preview.body);
 });
 
 test('preview_document renders markdown without losing structured data', async t => {
   const { call } = await createMcpFixture(t);
-  const preview = await call('preview_document', { variant: 'cv', format: 'markdown' });
+  const preview = await call('preview_document', { view: 'full', format: 'markdown' });
   assert.equal(preview.isError, false);
   assert.equal(preview.body, undefined);
   assert.ok(preview.text.includes('## Experience'));
@@ -105,7 +104,7 @@ test('preview_document renders markdown without losing structured data', async t
   assert.ok(preview.text.includes('- **Location:** Berlin'));
   assert.ok(preview.text.includes('- A. Uthor (2026). *Paper*.'));
   assert.deepEqual(preview.structuredContent.sections.map(s => s.id), ['experience', 'personal', 'pubs']);
-  const invalid = await call('preview_document', { variant: 'cv', format: 'yaml' });
+  const invalid = await call('preview_document', { view: 'full', format: 'yaml' });
   assert.equal(invalid.isError, true);
   assert.match(invalid.text, /'json' \| 'markdown'/);
 });
@@ -121,9 +120,9 @@ test('get_section renders one section as markdown with locale', async t => {
   assert.equal(german.structuredContent.revision, localized.body.revision);
   const english = await call('get_section', { sectionId: 'about', format: 'markdown' });
   assert.equal(english.text, '## About\n\n- **City:** Berlin\n');
-  const hidden = await call('get_section', { sectionId: 'experience', variant: 'resume', format: 'markdown' });
+  const hidden = await call('get_section', { sectionId: 'experience', view: 'compact', format: 'markdown' });
   assert.equal(hidden.isError, true);
-  assert.match(hidden.body.error, /not visible in the "resume" variant/);
+  assert.match(hidden.body.error, /not visible in the "compact" view/);
 });
 
 test('list_sections and get_section read without the full document', async t => {
@@ -132,7 +131,7 @@ test('list_sections and get_section read without the full document', async t => 
   assert.equal(listed.isError, false);
   assert.equal(typeof listed.body.revision, 'string');
   assert.deepEqual(listed.body.sections.map(s => s.id), ['experience', 'personal', 'pubs']);
-  assert.deepEqual(listed.body.sections[0], { id: 'experience', type: 'entries', title: 'Experience', visibility: 'cv', count: 1 });
+  assert.deepEqual(listed.body.sections[0], { id: 'experience', type: 'entries', title: 'Experience', visibility: 'full', count: 1 });
   assert.equal(listed.body.data, undefined);
 
   const single = await call('get_section', { sectionId: 'personal' });
@@ -144,10 +143,10 @@ test('list_sections and get_section read without the full document', async t => 
   assert.equal(missing.isError, true);
   assert.match(missing.body.error, /not found/);
 
-  const hidden = await call('get_section', { sectionId: 'experience', variant: 'resume' });
+  const hidden = await call('get_section', { sectionId: 'experience', view: 'compact' });
   assert.equal(hidden.isError, true);
-  assert.match(hidden.body.error, /not visible in the "resume" variant/);
-  const shown = await call('get_section', { sectionId: 'experience', variant: 'cv' });
+  assert.match(hidden.body.error, /not visible in the "compact" view/);
+  const shown = await call('get_section', { sectionId: 'experience', view: 'full' });
   assert.equal(shown.isError, false);
   assert.equal(shown.body.section.items[0].heading, 'Job A');
 });
@@ -157,7 +156,7 @@ test('put_section creates, updates and moves one section', async t => {
   const { body: { revision } } = await call('list_sections', {});
   const created = await call('put_section', { revision, section: { id: 'skills', title: 'Skills', type: 'entries', items: [] } });
   assert.equal(created.isError, false);
-  assert.equal(created.body.section.visibility, 'both');
+  assert.equal(created.body.section.visibility, 'all');
   assert.equal(created.body.index, 3);
 
   const moved = await call('put_section', {
@@ -196,10 +195,10 @@ test('put_item appends and replaces rows, entries and publications', async t => 
   const appended = await call('put_item', { revision, sectionId: 'experience', item: { heading: 'Job B' } });
   assert.equal(appended.isError, false);
   assert.equal(appended.body.index, 1);
-  assert.equal(appended.body.item.visibility, 'both');
+  assert.equal(appended.body.item.visibility, 'all');
   revision = appended.body.revision;
 
-  const replaced = await call('put_item', { revision, sectionId: 'experience', index: 0, item: { heading: 'Job A+', highlights: [{ text: 'New', visibility: 'cv' }] } });
+  const replaced = await call('put_item', { revision, sectionId: 'experience', index: 0, item: { heading: 'Job A+', highlights: [{ text: 'New', visibility: 'full' }] } });
   assert.equal(replaced.isError, false);
   assert.equal(replaced.body.item.heading, 'Job A+');
   revision = replaced.body.revision;
@@ -214,7 +213,7 @@ test('put_item appends and replaces rows, entries and publications', async t => 
     item: { authors: [{ name: 'A. Uthor', bold: true }], year: 2026, title: 'Paper v2' }
   });
   assert.equal(pub.isError, false);
-  assert.equal(pub.body.item.authors[0].visibility, 'both');
+  assert.equal(pub.body.item.authors[0].visibility, 'all');
   revision = pub.body.revision;
 
   const mismatch = await call('put_item', { revision, sectionId: 'personal', item: { heading: 'Not a row' } });
@@ -246,7 +245,7 @@ test('patch_document edits surgically and previews with dryRun', async t => {
     revision, dryRun: true,
     operations: [
       { op: 'replace', path: '/sections/0/items/0/heading', value: 'Dry run' },
-      { op: 'add', path: '/sections/0/items/0/highlights/-', value: { text: 'Extra', visibility: 'both' } }
+      { op: 'add', path: '/sections/0/items/0/highlights/-', value: { text: 'Extra', visibility: 'all' } }
     ]
   });
   assert.equal(preview.isError, false);
@@ -312,7 +311,7 @@ test('stray keys are rejected with a precise message', async t => {
   const { body: { revision } } = await call('list_sections', {});
   const stray = await call('patch_document', {
     revision, dryRun: true,
-    operations: [{ op: 'add', path: '/sections/0/items/0/highlights/-', value: { text: 'X', visibilty: 'both' } }]
+    operations: [{ op: 'add', path: '/sections/0/items/0/highlights/-', value: { text: 'X', visibilty: 'all' } }]
   });
   assert.equal(stray.isError, true);
   assert.match(stray.body.error, /visibilty/);

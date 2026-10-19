@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
-export const visibilitySchema = z.enum(['cv', 'resume', 'both']);
+// 'all' shows in the compact and full views; 'full' shows only in the full view.
+export const visibilitySchema = z.enum(['all', 'full']);
 export const localizedSchema = z.union([z.string(), z.object({ en: z.string().optional(), de: z.string().optional() }).strict()]);
 const fieldName = z.enum(['title', 'heading', 'subheading', 'info', 'subinfo', 'label', 'value', 'name', 'bold', 'year', 'institution']);
-// Omitted visibility defaults to 'both', matching the editor's treatment of new content.
-const defaultVisibility = visibilitySchema.default('both');
+// Omitted visibility defaults to 'all', matching the editor's treatment of new content.
+const defaultVisibility = visibilitySchema.default('all');
 const meta = { visibility: defaultVisibility, fieldVisibility: z.record(fieldName, visibilitySchema).optional() };
 export const textSchema = z.object({ text: localizedSchema, visibility: defaultVisibility }).strict();
 export const authorSchema = z.object({ ...meta, name: z.string(), bold: z.boolean().optional() }).strict();
@@ -20,46 +21,6 @@ export const pubSectionSchema = z.object({ ...base, type: z.literal('pub'), item
 export const sectionSchema = z.discriminatedUnion('type', [infoSectionSchema, entriesSectionSchema, pubSectionSchema]);
 export const documentSchema = z.object({ sections: z.array(sectionSchema) }).strict().refine(d => new Set(d.sections.map(s => s.id)).size === d.sections.length, 'Section IDs must be unique');
 
-const canonical = value => JSON.stringify(value, function (key, item) {
-  return item && typeof item === 'object' && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item;
-});
-const children = new Set(['sections', 'items', 'rows', 'highlights', 'tags', 'authors']);
-const signature = node => canonical(Object.fromEntries(Object.entries(node).filter(([key]) => !children.has(key) && key !== 'visibility')));
-function convert(node, variant, key) {
-  if (Array.isArray(node)) return node.map(v => convert(v, variant, key));
-  if (['highlights', 'tags'].includes(key)) return { text: node, visibility: variant };
-  if (!node || typeof node !== 'object') return node;
-  if (key === 'sections' && node.type === 'pub' && !node.items && node.content !== undefined) {
-    const { content, ...section } = node;
-    node = { ...section, items: [{ title: content, authors: [], year: '' }] };
-  }
-  return Object.fromEntries([...Object.entries(node).map(([k, v]) => [k, children.has(k) ? convert(v, variant, k) : v]), ['visibility', variant]]);
-}
-function merge(left, right) {
-  const result = structuredClone(left);
-  const used = new Set();
-  for (const candidate of right) {
-    const index = result.findIndex((v, i) => !used.has(i) && signature(v) === signature(candidate));
-    if (index < 0) { result.push(structuredClone(candidate)); used.add(result.length - 1); continue; }
-    used.add(index);
-    const match = result[index];
-    match.visibility = 'both';
-    for (const key of children) if (match[key] || candidate[key]) match[key] = merge(match[key] || [], candidate[key] || []);
-  }
-  return result;
-}
-export function mergeDocuments(cv, resume) {
-  const sections = merge(convert(cv.sections, 'cv', 'sections'), convert(resume.sections, 'resume', 'sections'));
-  const ids = new Set();
-  for (const section of sections) {
-    const original = section.id;
-    let suffix = 2;
-    while (ids.has(section.id)) section.id = `${original}-${suffix++}`;
-    ids.add(section.id);
-  }
-  return documentSchema.parse({ sections });
-}
 export function createDocumentStore(pool) {
   const read = async () => {
     const { rows } = await pool.query('SELECT data, revision FROM app_document WHERE id = 1');

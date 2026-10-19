@@ -19,14 +19,13 @@ async function createPdfFixture(t) {
   const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-resume-pdf-'));
   t.after(() => fs.rmSync(dataDirectory, { recursive: true, force: true }));
   writeJson(dataDirectory, 'passcodes.json', [{ code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' }]);
-  writeJson(dataDirectory, 'resume.json', { sections: [] });
-  writeJson(dataDirectory, 'cv.json', { sections: [] });
+  writeJson(dataDirectory, 'document.json', { sections: [] });
   fs.writeFileSync(path.join(dataDirectory, 'resume.pdf'), 'test pdf', 'utf8');
   const { storage } = await database(t, dataDirectory);
   const sessionStore = new PostgresSessionStore(storage.pool);
   t.after(() => sessionStore.close());
   const app = createApp({
-    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET, cookieDomain: undefined },
+    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET },
     oidcService: {
       async createAuthorizationRequest() {
         return { authorizationUrl: new URL('https://identity.example/authorize'), codeVerifier: 'v', state: 's', nonce: 'n' };

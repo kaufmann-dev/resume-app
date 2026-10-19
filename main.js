@@ -1,11 +1,5 @@
 import { projectDocument } from './document-model.js';
-import {
-  getVariantConfig,
-  getVariantConfigById,
-  isKnownVariant,
-  isLocalDevelopmentHostname,
-  resolveVariantId
-} from './variant-config.js';
+import { isLocalDevelopmentHostname } from './site-config.js';
 
 const DEFAULT_LANG = 'en';
 const DEFAULT_THEME = 'light';
@@ -14,8 +8,8 @@ const PREF_COOKIE_MAX_AGE = 31536000;
 
 let lang = DEFAULT_LANG;
 let theme = DEFAULT_THEME;
-let documentData = null;
-let activeVariant = getInitialVariantConfig();
+let sourceDocument = null;
+let view = new URLSearchParams(window.location.search).get('view') === 'full' ? 'full' : 'compact';
 
 const API_BASE_URL = isLocalDevelopmentHostname(window.location.hostname)
   ? 'http://localhost:3001'
@@ -102,43 +96,6 @@ function localize(value) {
 }
 
 
-function getRequestedLocalVariantId() {
-  if (!isLocalDevelopmentHostname(window.location.hostname)) {
-    return '';
-  }
-
-  const requestedVariant = new URLSearchParams(window.location.search).get('variant');
-  return isKnownVariant(requestedVariant) ? requestedVariant : '';
-}
-
-function getInitialVariantConfig() {
-  const requestedLocalVariantId = getRequestedLocalVariantId();
-
-  if (requestedLocalVariantId) {
-    return getVariantConfigById(requestedLocalVariantId);
-  }
-
-  return getVariantConfig(window.location.hostname);
-}
-
-function getVariantNoteHref(note) {
-  if (!note?.href) return '';
-
-  if (!isLocalDevelopmentHostname(window.location.hostname)) {
-    return note.href;
-  }
-
-  const targetVariantId = resolveVariantId(note.href);
-
-  if (!targetVariantId) {
-    return note.href;
-  }
-
-  const localUrl = new URL(window.location.href);
-  localUrl.searchParams.set('variant', targetVariantId);
-  return localUrl.toString();
-}
-
 function applyLegalFooter() {
   const imprintLink = document.getElementById('link-imprint');
   const privacyLink = document.getElementById('link-privacy');
@@ -151,10 +108,16 @@ function applyLegalFooter() {
   }
 }
 
-function applyVariantChrome() {
+function setButtonLabel(button, label) {
+  const text = localize(label);
+  button.setAttribute('aria-label', text);
+  button.dataset.tooltip = text;
+}
+
+function applyChrome() {
   document.documentElement.lang = lang;
-  document.title = localize(activeVariant.pageTitle);
-  document.getElementById('login-btn').textContent = localize(activeVariant.authButtonLabel);
+  document.title = localize({ en: 'David Kaufmann - Resume', de: 'David Kaufmann - Lebenslauf' });
+  document.getElementById('login-btn').textContent = localize({ en: 'View Resume', de: 'Lebenslauf ansehen' });
   authTitle.textContent = localize({ en: 'Private Access', de: 'Privater Zugang' });
   passcodeInput.placeholder = localize({ en: 'Enter Passcode...', de: 'Passcode eingeben...' });
   passcodeInput.setAttribute('aria-label', localize({ en: 'Passcode', de: 'Passcode' }));
@@ -166,21 +129,11 @@ function applyVariantChrome() {
     'btn-lang': { en: 'Switch to German', de: 'Zu Englisch wechseln' },
     'btn-logout': { en: 'Sign out', de: 'Abmelden' },
   })) {
-    const button = document.getElementById(id);
-    button.setAttribute('aria-label', localize(label));
-    button.title = localize(label);
+    setButtonLabel(document.getElementById(id), label);
   }
   applyThemeIcons();
+  applyViewIcons();
   applyLegalFooter();
-}
-
-function renderVariantNote() {
-  const noteElement = document.getElementById('variant-note');
-  const note = localize(activeVariant.switchNote);
-
-  if (!noteElement || !note) return;
-
-  noteElement.innerHTML = `${note.text} <a href="${getVariantNoteHref(note)}">${note.label}</a>`;
 }
 
 function saveOpen() {
@@ -264,12 +217,9 @@ function mkSection(section) {
 
 function applyThemeIcons() {
   const darkMode = theme === 'dark';
-  const button = document.getElementById('btn-theme');
-  const label = localize(darkMode
+  setButtonLabel(document.getElementById('btn-theme'), darkMode
     ? { en: 'Use light theme', de: 'Helles Design verwenden' }
     : { en: 'Use dark theme', de: 'Dunkles Design verwenden' });
-  button.setAttribute('aria-label', label);
-  button.title = label;
   const sun = document.getElementById('ico-sun');
   const moon = document.getElementById('ico-moon');
 
@@ -277,15 +227,24 @@ function applyThemeIcons() {
   if (moon) moon.style.display = darkMode ? 'none' : '';
 }
 
+function applyViewIcons() {
+  const fullView = view === 'full';
+  const button = document.getElementById('btn-view');
+  setButtonLabel(button, fullView
+    ? { en: 'Show compact version', de: 'Kompakte Version anzeigen' }
+    : { en: 'Show full version', de: 'Vollständige Version anzeigen' });
+  button.setAttribute('aria-pressed', String(fullView));
+  document.getElementById('ico-expand').style.display = fullView ? 'none' : '';
+  document.getElementById('ico-collapse').style.display = fullView ? '' : 'none';
+}
+
 function render() {
-  if (!documentData) return;
+  if (!sourceDocument) return;
 
   document.documentElement.lang = lang;
 
-  document.getElementById('cv-body').innerHTML = documentData.sections.map(mkSection).join('');
-  renderVariantNote();
-  applyVariantChrome();
-  applyThemeIcons();
+  document.getElementById('cv-body').innerHTML = projectDocument(sourceDocument, view).sections.map(mkSection).join('');
+  applyChrome();
 }
 
 function showAuthenticatedView() {
@@ -302,7 +261,7 @@ function showAuthView(message = '') {
   authError.textContent = message;
   logoutButton.style.display = 'none';
   editButton.style.display = 'none';
-  documentData = null;
+  sourceDocument = null;
 }
 
 async function authenticate(options = {}) {
@@ -322,15 +281,10 @@ async function authenticate(options = {}) {
     };
 
     if (passcode) {
-      requestOptions.body = JSON.stringify({
-        passcode,
-        variant: activeVariant.id
-      });
+      requestOptions.body = JSON.stringify({ passcode });
     }
 
-    const requestUrl = buildApiUrl(endpoint);
-    requestUrl.searchParams.set('variant', activeVariant.id);
-    const response = await fetch(requestUrl, requestOptions);
+    const response = await fetch(buildApiUrl(endpoint), requestOptions);
 
     const result = await response.json();
 
@@ -342,8 +296,7 @@ async function authenticate(options = {}) {
       return false;
     }
 
-    documentData = result.data;
-    activeVariant = getVariantConfigById(result.variant);
+    sourceDocument = result.data;
     showAuthenticatedView();
     render();
 
@@ -355,7 +308,7 @@ async function authenticate(options = {}) {
           passcodesData: result.passcodesData,
           apiBaseUrl: API_BASE_URL,
           onSave: (data) => {
-            documentData = projectDocument(data, activeVariant.id);
+            sourceDocument = data;
             render();
           }
         });
@@ -395,7 +348,7 @@ async function handleLogin() {
 }
 
 function handleDownload() {
-  if (!documentData) {
+  if (!sourceDocument) {
     showAuthView(localize({
       en: 'Your session has ended. Please sign in again.',
       de: 'Deine Sitzung ist beendet. Bitte erneut anmelden.'
@@ -403,9 +356,7 @@ function handleDownload() {
     return;
   }
 
-  const downloadUrl = buildApiUrl('/api/download');
-  downloadUrl.searchParams.set('variant', activeVariant.id);
-  window.location.assign(downloadUrl.toString());
+  window.location.assign(buildApiUrl('/api/download').toString());
 }
 
 async function restoreStoredSession() {
@@ -434,7 +385,18 @@ document.getElementById('btn-lang').addEventListener('click', () => {
   saveOpen();
   lang = lang === 'en' ? 'de' : 'en';
   persistLanguage();
-  applyVariantChrome();
+  applyChrome();
+  render();
+});
+
+document.getElementById('btn-view').addEventListener('click', () => {
+  saveOpen();
+  view = view === 'full' ? 'compact' : 'full';
+  const url = new URL(window.location.href);
+  if (view === 'full') url.searchParams.set('view', 'full');
+  else url.searchParams.delete('view');
+  history.replaceState(history.state, '', url);
+  applyViewIcons();
   render();
 });
 
@@ -480,5 +442,5 @@ window.addEventListener('afterprint', () => {
 lang = getStoredLanguage();
 theme = getStoredTheme();
 document.documentElement.setAttribute('data-theme', theme);
-applyVariantChrome();
+applyChrome();
 restoreStoredSession();

@@ -29,8 +29,10 @@ async function createFixture(t, authConfigOverrides = {}) {
     { code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' },
     { code: 'expired-code', expires: '2000-01-01T00:00:00.000Z' }
   ]);
-  writeJson(dataDirectory, 'resume.json', { sections: [{ id: 'resume', title: 'Resume', type: 'entries', items: [] }] });
-  writeJson(dataDirectory, 'cv.json', { sections: [{ id: 'cv', title: 'CV', type: 'entries', items: [] }] });
+  writeJson(dataDirectory, 'document.json', { sections: [
+    { id: 'compact', title: 'Compact', type: 'entries', items: [] },
+    { id: 'extra', title: 'Extra', type: 'entries', items: [], visibility: 'full' }
+  ] });
   fs.writeFileSync(path.join(dataDirectory, 'resume.pdf'), 'test pdf', 'utf8');
 
   let currentTime = Date.parse('2026-01-01T00:00:00.000Z');
@@ -63,7 +65,6 @@ async function createFixture(t, authConfigOverrides = {}) {
     callbackUrl: 'https://resume.kaufmann.dev/auth/callback',
     postLogoutUrl: 'https://resume.kaufmann.dev/',
     sessionSecret: TEST_SESSION_SECRET,
-    cookieDomain: undefined,
     ...authConfigOverrides
   };
   const { storage } = await database(t, dataDirectory);
@@ -132,28 +133,26 @@ test('viewer sessions use opaque cookies and enforce expiry and immediate revoca
 
   const expiredLogin = await viewer
     .post('/api/auth/passcode')
-    .send({ passcode: 'expired-code', variant: 'resume' });
+    .send({ passcode: 'expired-code' });
   assert.equal(expiredLogin.status, 403);
 
   const login = await viewer
     .post('/api/auth/passcode')
-    .send({ passcode: 'viewer-code', variant: 'cv' });
+    .send({ passcode: 'viewer-code' });
   assert.equal(login.status, 200);
   assert.equal(login.body.isAdmin, false);
-  assert.equal(login.body.variant, 'cv');
 
   const cookie = sessionCookie(login);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Lax/);
   assert.doesNotMatch(cookie, /viewer-code/);
 
-  const restored = await viewer.get('/api/session?variant=resume');
+  const restored = await viewer.get('/api/session');
   assert.equal(restored.status, 200);
-  assert.equal(restored.body.variant, 'resume');
   assert.equal(sessionCookie(restored), undefined);
 
   await fixture.storage.mutateCollection('passcodes', entries => { entries.length = 0; });
-  const revoked = await viewer.get('/api/session?variant=resume');
+  const revoked = await viewer.get('/api/session');
   assert.equal(revoked.status, 401);
   assert.equal(revoked.body.error, 'Invalid passcode');
 });
@@ -200,14 +199,14 @@ test('OIDC callback regenerates an admin session and RP logout destroys it', asy
 
   const login = await admin
     .get('/auth/login')
-    .query({ returnTo: 'https://cv.kaufmann.dev/' });
+    .query({ returnTo: 'https://resume.kaufmann.dev/' });
   assert.equal(login.status, 303);
   assert.equal(login.headers.location, 'https://identity.example/authorize?flow=oidc');
   const transactionCookie = sessionCookie(login);
 
   const callback = await admin.get('/auth/callback?code=code-value&state=state-value');
   assert.equal(callback.status, 303);
-  assert.equal(callback.headers.location, 'https://cv.kaufmann.dev/');
+  assert.equal(callback.headers.location, 'https://resume.kaufmann.dev/');
   const adminCookie = sessionCookie(callback);
   assert.notEqual(adminCookie.split(';')[0], transactionCookie.split(';')[0]);
   assert.doesNotMatch(adminCookie, /raw-id-token/);
@@ -225,7 +224,7 @@ test('OIDC callback regenerates an admin session and RP logout destroys it', asy
     { codeVerifier: 'pkce-verifier', state: 'state-value', nonce: 'nonce-value' }
   );
 
-  const restored = await admin.get('/api/session?variant=cv');
+  const restored = await admin.get('/api/session');
   assert.equal(restored.status, 200);
   assert.equal(restored.body.isAdmin, true);
   assert.deepEqual(restored.body.passcodesData, [
@@ -278,7 +277,7 @@ test('passive restore does not extend idle time, while user actions do', async (
   await activeViewer.post('/api/auth/passcode').send({ passcode: 'viewer-code' }).expect(200);
   const secondCreatedAt = fixture.now;
   fixture.now = secondCreatedAt + IDLE_SESSION_MS - 1;
-  await activeViewer.get('/api/download?variant=resume').expect(200);
+  await activeViewer.get('/api/download').expect(200);
   fixture.now = secondCreatedAt + IDLE_SESSION_MS + 1;
   await activeViewer.get('/api/session').expect(200);
 });
@@ -293,7 +292,7 @@ test('absolute lifetime ends active sessions at seven days', async (t) => {
 
   for (let elapsed = IDLE_SESSION_MS - 1; elapsed < ABSOLUTE_SESSION_MS; elapsed += IDLE_SESSION_MS - 1) {
     fixture.now = createdAt + elapsed;
-    await viewer.get('/api/download?variant=resume').expect(200);
+    await viewer.get('/api/download').expect(200);
   }
 
   fixture.now = createdAt + ABSOLUTE_SESSION_MS;
@@ -308,16 +307,16 @@ test('viewer logout is local and does not call the provider', async (t) => {
   await viewer.post('/api/auth/passcode').send({ passcode: 'viewer-code' }).expect(200);
   const logout = await viewer
     .post('/auth/logout')
-    .query({ returnTo: 'https://cv.kaufmann.dev/' });
+    .query({ returnTo: 'https://resume.kaufmann.dev/' });
 
   assert.equal(logout.status, 303);
-  assert.equal(logout.headers.location, 'https://cv.kaufmann.dev/');
+  assert.equal(logout.headers.location, 'https://resume.kaufmann.dev/');
   assert.deepEqual(fixture.oidcCalls.logoutHints, []);
   await viewer.get('/api/session').expect(401);
 });
 
-test('HTTPS production requests set a secure shared-subdomain cookie', async (t) => {
-  const fixture = await createFixture(t, { cookieDomain: '.kaufmann.dev' });
+test('HTTPS production requests set a secure host-only cookie', async (t) => {
+  const fixture = await createFixture(t);
   t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
 
   const login = await request(fixture.app)
@@ -328,13 +327,13 @@ test('HTTPS production requests set a secure shared-subdomain cookie', async (t)
   const cookie = sessionCookie(login);
 
   assert.equal(login.status, 200);
-  assert.match(cookie, /Domain=\.kaufmann\.dev/);
+  assert.doesNotMatch(cookie, /Domain=/);
   assert.match(cookie, /Secure/);
   assert.match(cookie, /HttpOnly/);
   assert.match(cookie, /SameSite=Lax/);
 });
 
-test('production auth configuration requires the fixed shared-domain settings', () => {
+test('production auth configuration requires the registered URLs', () => {
   const environment = {
     NODE_ENV: 'production',
     OIDC_ISSUER_URL: 'https://identity.example/',
@@ -342,17 +341,12 @@ test('production auth configuration requires the fixed shared-domain settings', 
     OIDC_CLIENT_SECRET: 'client-secret',
     OIDC_CALLBACK_URL: 'https://resume.kaufmann.dev/auth/callback',
     OIDC_POST_LOGOUT_URL: 'https://resume.kaufmann.dev/',
-    SESSION_SECRET: TEST_SESSION_SECRET,
-    SESSION_COOKIE_DOMAIN: '.kaufmann.dev'
+    SESSION_SECRET: TEST_SESSION_SECRET
   };
 
-  assert.equal(loadAuthConfig(environment).cookieDomain, '.kaufmann.dev');
+  assert.equal(loadAuthConfig(environment).callbackUrl, 'https://resume.kaufmann.dev/auth/callback');
   assert.throws(
-    () => loadAuthConfig({ ...environment, SESSION_COOKIE_DOMAIN: '.example.com' }),
-    /SESSION_COOKIE_DOMAIN must be \.kaufmann\.dev/
-  );
-  assert.throws(
-    () => loadAuthConfig({ ...environment, OIDC_CALLBACK_URL: 'https://cv.kaufmann.dev/auth/callback' }),
+    () => loadAuthConfig({ ...environment, OIDC_CALLBACK_URL: 'https://other.kaufmann.dev/auth/callback' }),
     /registered production callback URL/
   );
 });
@@ -457,15 +451,17 @@ test('OIDC discovery permits insecure requests only for validated loopback issue
   assert.equal(remoteHttpStub.discoveryCalls.length, 0);
 });
 
-test('browser requests are limited to the two production sites and local development', async (t) => {
+test('browser requests are limited to the production site and local development', async (t) => {
   const fixture = await createFixture(t);
   t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
 
-  await request(fixture.app)
-    .post('/api/auth/passcode')
-    .set('Origin', 'https://malicious.example')
-    .send({ passcode: 'viewer-code' })
-    .expect(403);
+  for (const origin of ['https://malicious.example', 'https://cv.kaufmann.dev']) {
+    await request(fixture.app)
+      .post('/api/auth/passcode')
+      .set('Origin', origin)
+      .send({ passcode: 'viewer-code' })
+      .expect(403);
+  }
 
   await request(fixture.app)
     .post('/api/auth/passcode')
@@ -516,11 +512,11 @@ test('shared editor data and MCP writes require the correct credentials and revi
   const current = await admin.get('/api/data').expect(200);
   assert.deepEqual(current.body.data, { sections: [] });
   await admin.post('/api/save').send({ data: document.data, revision: current.body.revision }).expect(200);
-  const preview = await rpc('tools/call', { name: 'preview_document', arguments: { variant: 'cv' } }).expect(200);
-  assert.equal(JSON.parse(preview.body.result.content[0].text).sections[0].id, 'cv');
-  const viewerData = await viewer.get('/api/session?variant=resume').expect(200);
+  const preview = await rpc('tools/call', { name: 'preview_document', arguments: { view: 'compact' } }).expect(200);
+  assert.deepEqual(JSON.parse(preview.body.result.content[0].text).sections.map(s => s.id), ['compact']);
+  const viewerData = await viewer.get('/api/session').expect(200);
   assert.equal(viewerData.body.document, undefined);
-  assert.deepEqual(viewerData.body.data.sections.map(s => s.id), ['resume']);
+  assert.deepEqual(viewerData.body.data.sections.map(s => [s.id, s.visibility]), [['compact', 'all'], ['extra', 'full']]);
   await admin.post('/api/save').send({ data: { sections: 'wrong' }, revision: document.revision }).expect(400);
   await admin.delete(`/api/keys/${keys[0].id}`).expect(200);
   await rpc('tools/list').expect(401);

@@ -20,7 +20,7 @@ async function createErrorFixture(t) {
   const sessionStore = new PostgresSessionStore(storage.pool);
   t.after(() => sessionStore.close());
   return createApp({
-    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET, cookieDomain: undefined },
+    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET },
     oidcService: {},
     sessionStore,
     storage,

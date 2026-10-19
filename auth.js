@@ -96,21 +96,12 @@ export function loadAuthConfig(environment = process.env) {
     { originOnly: true }
   ).toString();
   const sessionSecret = requireEnvironmentValue(environment, 'SESSION_SECRET');
-  const cookieDomain = environment.SESSION_COOKIE_DOMAIN?.trim() || undefined;
 
   if (sessionSecret.length < 32) {
     throw new Error('SESSION_SECRET must be at least 32 characters long');
   }
 
-  if (production && !cookieDomain) {
-    throw new Error('SESSION_COOKIE_DOMAIN is required in production');
-  }
-
   if (production) {
-    if (cookieDomain !== '.kaufmann.dev') {
-      throw new Error('SESSION_COOKIE_DOMAIN must be .kaufmann.dev in production');
-    }
-
     if (callbackUrl !== 'https://resume.kaufmann.dev/auth/callback') {
       throw new Error('OIDC_CALLBACK_URL must use the registered production callback URL');
     }
@@ -126,8 +117,7 @@ export function loadAuthConfig(environment = process.env) {
     clientSecret: requireEnvironmentValue(environment, 'OIDC_CLIENT_SECRET'),
     callbackUrl,
     postLogoutUrl,
-    sessionSecret,
-    cookieDomain
+    sessionSecret
   };
 }
 
@@ -212,7 +202,6 @@ export function createSessionMiddleware(config, store) {
     saveUninitialized: false,
     rolling: false,
     cookie: {
-      domain: config.cookieDomain,
       httpOnly: true,
       maxAge: IDLE_SESSION_MS,
       sameSite: 'lax',
