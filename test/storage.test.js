@@ -32,7 +32,7 @@ test('migration imports content, keys, passcodes and exact PDF bytes once, leavi
   fs.writeFileSync(path.join(directory, 'document.json'), 'broken');
   await initializeStorage(options);
   assert.deepEqual(await storage.readCollection('keys'), []);
-  assert.equal((await pool.query('SELECT * FROM app_migrations')).rowCount, 2);
+  assert.equal((await pool.query('SELECT * FROM app_migrations')).rowCount, 3);
 });
 
 test('volume data takes precedence over old paths, including empty key lists', async t => {
@@ -75,7 +75,16 @@ test('visibility migration converts both and cv to all and full once', async t =
   assert.equal(section.items[0].visibility, 'all');
   assert.deepEqual(section.items[0].fieldVisibility, { info: 'full' });
   assert.equal(section.items[0].highlights[0].visibility, 'full');
-  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2]);
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3]);
+});
+
+test('section open defaults are removed once', async t => {
+  const { options, pool } = await fixture(t);
+  await initializeStorage(options);
+  await pool.query('UPDATE app_document SET data = $1 WHERE id = 1', [JSON.stringify({ sections: [{ id: 'work', title: 'Work', type: 'entries', open: true, items: [] }] })]);
+  await pool.query('DELETE FROM app_migrations WHERE version = 3');
+  await initializeStorage(options);
+  assert.deepEqual((await createDocumentStore(pool).read()).data.sections[0], { id: 'work', title: 'Work', type: 'entries', visibility: 'all', items: [] });
 });
 
 test('visibility migration rejects resume-only content and leaves the document untouched', async t => {
