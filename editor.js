@@ -1,9 +1,11 @@
 // ── Visual Editor Module ──
-const ICONS = {
-  up: '<polyline points="18 15 12 9 6 15"/>',
-  down: '<polyline points="6 9 12 15 18 9"/>',
-  remove: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
-};
+import { createElement, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, X } from 'lucide';
+
+const ICONS = { up: ChevronUp, down: ChevronDown, remove: X, expand: ChevronRight, back: ChevronLeft };
+
+function icon(name) {
+  return createElement(ICONS[name], { 'aria-hidden': 'true' });
+}
 
 function loc(val, lang) {
   if (val == null) return '';
@@ -63,9 +65,7 @@ function h(tag, attrs, ...children) {
 }
 
 function iconButton(name, label, onClick, danger = false) {
-  const button = h('button', { type: 'button', className: 'ed-icon-btn' + (danger ? ' ed-icon-btn--danger' : ''), 'aria-label': label, title: label, onClick });
-  button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
-  return button;
+  return h('button', { type: 'button', className: 'ed-icon-btn' + (danger ? ' ed-icon-btn--danger' : ''), 'aria-label': label, title: label, onClick }, icon(name));
 }
 
 function itemActions(items, index, onDataChange, rebuildList, noun) {
@@ -82,6 +82,10 @@ function itemActions(items, index, onDataChange, rebuildList, noun) {
 }
 
 // Only the exception is labelled; content without a badge appears in both views.
+function itemTitle(text) {
+  return h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, icon('expand'), h('span', { className: 'ed-item-title-text' }, text));
+}
+
 function visibilityBadge(node) {
   const badge = h('span', { className: 'ed-visibility-badge' }, 'Full view only');
   badge.hidden = node.visibility !== 'full';
@@ -177,7 +181,7 @@ function renderInfoCard(row, index, rows, onDataChange, rebuildList) {
   const card = h('div', { className: 'ed-item-card' });
 
   const header = h('div', { className: 'ed-item-header' });
-  header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, loc(row.label, 'en') || '(untitled)'));
+  header.appendChild(itemTitle(loc(row.label, 'en') || '(untitled)'));
 
   const badge = visibilityBadge(row);
   header.appendChild(badge);
@@ -191,7 +195,7 @@ function renderInfoCard(row, index, rows, onDataChange, rebuildList) {
 
   const body = h('div', { className: 'ed-item-body' });
   body.appendChild(visibilityControl(row, () => { badge.hidden = row.visibility !== 'full'; onDataChange(); }));
-  body.appendChild(contentField('Label', row, 'label', v => { onDataChange(); header.querySelector('.ed-item-title').textContent = loc(v, 'en') || '(untitled)'; }));
+  body.appendChild(contentField('Label', row, 'label', v => { onDataChange(); header.querySelector('.ed-item-title-text').textContent = loc(v, 'en') || '(untitled)'; }));
   body.appendChild(contentField('Value', row, 'value', v => { onDataChange(); }));
 
   card.appendChild(body);
@@ -242,7 +246,7 @@ function renderEntryCard(item, index, items, onDataChange, rebuildList) {
   const card = h('div', { className: 'ed-item-card' });
 
   const header = h('div', { className: 'ed-item-header' });
-  header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, loc(item.heading, 'en') || '(untitled)'));
+  header.appendChild(itemTitle(loc(item.heading, 'en') || '(untitled)'));
 
   const badge = visibilityBadge(item);
   header.appendChild(badge);
@@ -256,7 +260,7 @@ function renderEntryCard(item, index, items, onDataChange, rebuildList) {
 
   const body = h('div', { className: 'ed-item-body' });
   body.appendChild(visibilityControl(item, () => { badge.hidden = item.visibility !== 'full'; onDataChange(); }));
-  body.appendChild(contentField('Heading', item, 'heading', v => { onDataChange(); header.querySelector('.ed-item-title').textContent = loc(v, 'en') || '(untitled)'; }));
+  body.appendChild(contentField('Heading', item, 'heading', v => { onDataChange(); header.querySelector('.ed-item-title-text').textContent = loc(v, 'en') || '(untitled)'; }));
   body.appendChild(contentField('Subheading', item, 'subheading', v => { onDataChange(); }));
   body.appendChild(contentField('Info', item, 'info', v => { onDataChange(); }));
   body.appendChild(contentField('Subinfo', item, 'subinfo', v => { onDataChange(); }));
@@ -298,7 +302,7 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
   const card = h('div', { className: 'ed-item-card' });
   const authorStr = (pub.authors || []).map(a => a.name).join(' & ');
   const header = h('div', { className: 'ed-item-header' });
-  header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, authorStr + ' (' + (pub.year || '') + ')'));
+  header.appendChild(itemTitle(authorStr + ' (' + (pub.year || '') + ')'));
 
   const badge = visibilityBadge(pub);
   header.appendChild(badge);
@@ -498,7 +502,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     const statusBadge = h('span', {
       className: 'ed-pc-status ' + (isExpired ? 'ed-pc-status--expired' : 'ed-pc-status--active')
     }, isExpired ? 'Expired' : 'Active');
-    header.appendChild(h('button', { className: 'ed-item-title', type: 'button', 'aria-expanded': 'false' }, entry.code || '(empty)'));
+    header.appendChild(itemTitle(entry.code || '(empty)'));
     header.appendChild(statusBadge);
     header.appendChild(h('div', { className: 'ed-item-actions' }, iconButton('remove', 'Delete passcode', async event => {
       event.stopPropagation();
@@ -520,7 +524,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     let codeDebounce = null;
     codeInp.addEventListener('input', () => {
       entry.code = codeInp.value;
-      header.querySelector('.ed-item-title').textContent = entry.code || '(empty)';
+      header.querySelector('.ed-item-title-text').textContent = entry.code || '(empty)';
       clearTimeout(codeDebounce);
       codeDebounce = setTimeout(() => {
         if (entry.code && entry.expires) updatePasscode(index, entry.code, entry.expires);
@@ -817,8 +821,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       // Section header
       const secHeader = h('div', { className: 'ed-section-header' });
 
-      const backBtn = h('button', { className: 'ed-mobile-back-btn', onClick: () => { mobileShowDetail = false; renderEditor(); } });
-      backBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg> All sections';
+      const backBtn = h('button', { className: 'ed-mobile-back-btn', onClick: () => { mobileShowDetail = false; renderEditor(); } }, icon('back'), 'All sections');
       secHeader.appendChild(backBtn);
 
       const headerTop = h('div', { className: 'ed-section-header-top' });
@@ -833,7 +836,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       const idInp = h('input', { className: 'ed-input ed-code', type: 'text', 'aria-label': 'Section identifier', value: sec.id });
       idInp.addEventListener('input', () => { sec.id = idInp.value; markDirty(); });
       idWrap.appendChild(idInp);
-      const advanced = h('details', { className: 'ed-section-advanced' }, h('summary', {}, 'Section identifier'), idWrap);
+      const advanced = h('details', { className: 'ed-section-advanced' }, h('summary', {}, icon('expand'), 'Section identifier'), idWrap);
       secHeader.appendChild(advanced);
       meta.appendChild(visibilityControl(sec, () => { markDirty(); renderEditor(); }));
 

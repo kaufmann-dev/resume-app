@@ -468,8 +468,25 @@ select.ed-input {
 }
 
 .ed-section-advanced summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   width: fit-content;
+  list-style: none;
   cursor: pointer;
+}
+
+.ed-section-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.ed-section-advanced summary svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ed-section-advanced[open] summary svg {
+  transform: rotate(90deg);
 }
 
 .ed-section-id {
@@ -526,19 +543,19 @@ select.ed-input {
   cursor: pointer;
 }
 
-.ed-item-title::before {
-  content: '';
+.ed-item-title svg {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  margin: 0 2px;
-  border-right: 1.5px solid var(--t3);
-  border-bottom: 1.5px solid var(--t3);
-  transform: rotate(-45deg);
+  width: 16px;
+  height: 16px;
+  color: var(--t3);
 }
 
-.ed-item-title[aria-expanded="true"]::before {
-  transform: rotate(45deg);
+.ed-item-title[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.ed-item-title-text {
+  min-width: 0;
 }
 
 .ed-item-actions {
