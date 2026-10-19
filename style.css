@@ -264,6 +264,13 @@ header {
   height: 16px;
 }
 
+.tbtn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Wide screens mirror the section nav: the actions sit in the right margin with their labels always visible. */
 @media (min-width: 1240px) {
   .menu-btn {
@@ -290,13 +297,15 @@ header {
   .tbtn {
     gap: 10px;
     min-height: 0;
-    padding: 5px 10px;
+    padding: 5px 0;
     color: var(--t2);
     font-size: 0.8rem;
     line-height: 1.35;
   }
 
-  .tbtn:hover {
+  .tbtn:hover,
+  .tbtn:active {
+    background: none;
     color: var(--t1);
   }
 }
