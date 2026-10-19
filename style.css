@@ -253,8 +253,8 @@ header {
 
 /* The rule sits centered between sections: the last block of a section adds no trailing space. */
 .sec {
-  margin-top: 32px;
-  padding-top: 32px;
+  margin-top: 24px;
+  padding-top: 24px;
   border-top: 1px solid var(--t1);
   scroll-margin-top: 24px;
 }
@@ -546,11 +546,6 @@ body.is-auth-view #legal-footer {
 
   header {
     padding-top: 36px;
-  }
-
-  .sec {
-    margin-top: 24px;
-    padding-top: 24px;
   }
 
   .hdr-top {
