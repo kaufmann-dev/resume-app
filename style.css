@@ -252,7 +252,10 @@ header {
 
 
 .sec {
-  padding-top: 48px;
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 24px;
 }
 
 .sec h2 {
@@ -545,7 +548,7 @@ body.is-auth-view #legal-footer {
   }
 
   .sec {
-    padding-top: 40px;
+    margin-top: 40px;
   }
 
   .hdr-top {
