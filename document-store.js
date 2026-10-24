@@ -7,7 +7,7 @@ export const localizedSchema = z.union([z.string(), z.object({ en: z.string().op
 const fieldName = z.enum(['title', 'heading', 'subheading', 'info', 'subinfo', 'label', 'value', 'name', 'bold', 'year', 'institution']);
 // Omitted visibility defaults to 'all', matching the editor's treatment of new content.
 const defaultVisibility = visibilitySchema.default('all');
-const meta = { visibility: defaultVisibility, fieldVisibility: z.record(fieldName, visibilitySchema).optional() };
+const meta = { visibility: defaultVisibility, fieldVisibility: z.partialRecord(fieldName, visibilitySchema).optional() };
 export const textSchema = z.object({ text: localizedSchema, visibility: defaultVisibility }).strict();
 export const authorSchema = z.object({ ...meta, name: z.string(), bold: z.boolean().optional() }).strict();
 export const entrySchema = z.object({ ...meta, heading: localizedSchema.optional(), subheading: localizedSchema.optional(), info: localizedSchema.optional(), subinfo: localizedSchema.optional(), highlights: z.array(textSchema).optional(), tags: z.array(textSchema).optional() }).strict();

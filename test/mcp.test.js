@@ -106,7 +106,7 @@ test('preview_document renders markdown without losing structured data', async t
   assert.deepEqual(preview.structuredContent.sections.map(s => s.id), ['experience', 'personal', 'pubs']);
   const invalid = await call('preview_document', { view: 'full', format: 'yaml' });
   assert.equal(invalid.isError, true);
-  assert.match(invalid.text, /'json' \| 'markdown'/);
+  assert.match(invalid.text, /"json"\|"markdown"/);
 });
 
 test('get_section renders one section as markdown with locale', async t => {
