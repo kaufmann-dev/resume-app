@@ -9,6 +9,7 @@ A small personal resume app built with Vite on the frontend and Express on the b
 - Theme and language preferences shared across `.kaufmann.dev` subdomains
 - PDF download through the authenticated backend
 - PDF replacement upload from the admin editor
+- PDF attachments for publications, opened in a new tab by signed-in viewers
 - Content editor with visibility controls for sections, items, fields, bullets, tags, and authors
 - Hosted MCP endpoint with API keys managed in admin API Keys
 
@@ -61,7 +62,7 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE
 
 Use a dedicated database reachable from the app container. URL-encode special characters in credentials. Use your provider's connection string and TLS parameters when applicable. The database role needs permission to create tables and indexes in its default schema and to read/write those tables: startup creates them automatically. Keep the existing OIDC and session environment variables.
 
-PostgreSQL is the only runtime store. Content and visibility settings use JSONB with an atomic revision check; passcodes and API-key hashes use JSONB collections with transactional row locks; the PDF uses `bytea`; browser sessions use expiring database rows. All app processes read the database directly. Expired sessions are rejected immediately and cleaned up hourly. Database failures stop startup or fail the request; there is no file fallback.
+PostgreSQL is the only runtime store. Content and visibility settings use JSONB with an atomic revision check; passcodes and API-key hashes use JSONB collections with transactional row locks; the résumé and publication PDFs use `bytea`; browser sessions use expiring database rows. All app processes read the database directly. Expired sessions are rejected immediately and cleaned up hourly. Database failures stop startup or fail the request; there is no file fallback.
 
 ### Initial import and shared content
 
@@ -96,7 +97,7 @@ Connect with Streamable HTTP at `https://resume.kaufmann.dev/api/mcp` and the he
 
 Every tool returns typed `structuredContent` alongside its human-readable text; Markdown reads keep the same structured JSON so a follow-up edit needs no second read. Every write tool needs the revision from any read; stale revisions are rejected with the current revision. Patch paths are JSON Pointers below the document root, e.g. `/sections/0/title/en` or `/sections/1/items/0/highlights/-` to append a bullet. Use `test` operations or `dryRun` to verify before committing.
 
-Every section, entry, row, author, bullet, and tag has `visibility: "all" | "full"`, defaulting to `"all"` when omitted; `"full"` content appears only in the full view. Bullets and tags use `{ "text": "Content", "visibility": "all" }`; text may also be localized as `{ "en": "…", "de": "…" }`. Optional `fieldVisibility` controls individual fields, e.g. `{ "info": "full" }`; unspecified fields are always visible. The MCP tool schema describes the full document structure.
+Every section, entry, row, author, bullet, and tag has `visibility: "all" | "full"`, defaulting to `"all"` when omitted; `"full"` content appears only in the full view. Bullets and tags use `{ "text": "Content", "visibility": "all" }`; text may also be localized as `{ "en": "…", "de": "…" }`. Optional `fieldVisibility` controls individual fields, e.g. `{ "info": "full" }`; unspecified fields are always visible. Publications may carry `pdf`, the id of a PDF uploaded in the admin editor; remove it to detach the file. MCP cannot upload PDFs. The MCP tool schema describes the full document structure.
 
 ### Example passcode import file (`passcodes.json`)
 ```json
@@ -328,6 +329,10 @@ The current implementation:
 - reuses the session cookie when available
 - serves PDF bytes from PostgreSQL through the Express download endpoint
 - triggers the browser download from the frontend with a normal navigation to `/api/download`
+
+### Publication PDFs
+
+Each publication can have its own PDF. In the editor's publication card, choose a file and click **Upload PDF**; `POST /api/publication-pdf` (admin only, same validation and 10 MB limit) stores it and returns an id that the card writes into the publication's `pdf` field. Click **Save** to publish it. Signed-in viewers then see a **PDF** link after the publication, which opens `GET /api/publication-pdf/:id` inline in a new tab. The link follows the PDF field's visibility and is hidden when printing. Replacing a file uploads a new one with a new id. After each content save, publication PDFs that no publication references and that are more than a day old are deleted. The grace period keeps unsaved uploads safe from concurrent saves.
 
 ## Proxy headers and origins
 

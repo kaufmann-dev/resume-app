@@ -95,3 +95,39 @@ test('PDF metadata and upload require admin access', async t => {
   await request(app).get('/api/pdf').expect(401);
   await request(app).post('/api/pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(401);
 });
+
+test('publication PDFs upload for admins and open inline for viewers', async t => {
+  const { app, admin, viewer } = await createPdfFixture(t);
+  const uploaded = await admin.post('/api/publication-pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(200);
+  assert.match(uploaded.body.id, /^[0-9a-f-]{36}$/);
+  assert.equal(uploaded.body.size, PDF_BYTES.length);
+  const { body: { revision } } = await admin.get('/api/data').expect(200);
+  await admin.post('/api/save').send({ revision, data: { sections: [{ id: 'pubs', title: 'Pubs', type: 'pub', items: [{ title: 'My Paper', year: 2026, authors: [], pdf: uploaded.body.id }] }] } }).expect(200);
+
+  const opened = await viewer.get(`/api/publication-pdf/${uploaded.body.id}`).expect(200);
+  assert.match(opened.headers['content-type'], /application\/pdf/);
+  assert.equal(opened.headers['content-disposition'], 'inline; filename="My_Paper.pdf"');
+  assert.equal(opened.headers['x-content-type-options'], 'nosniff');
+  assert.deepEqual(opened.body, PDF_BYTES);
+
+  await request(app).get(`/api/publication-pdf/${uploaded.body.id}`).expect(401);
+  await viewer.get('/api/publication-pdf/0b5c7f0e-8f3a-4c1d-9a2b-3c4d5e6f7a8b').expect(404);
+  await viewer.get('/api/publication-pdf/resume').expect(404);
+  await viewer.post('/api/publication-pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(403);
+  await admin.post('/api/publication-pdf').set('Content-Type', 'application/pdf').send(Buffer.from('not a pdf')).expect(400);
+});
+
+test('saving removes stale unreferenced publication PDFs only', async t => {
+  const { storage, admin } = await createPdfFixture(t);
+  const upload = async () => (await admin.post('/api/publication-pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(200)).body.id;
+  const kept = await upload();
+  const orphan = await upload();
+  await storage.pool.query("UPDATE app_pdf SET updated_at = now() - interval '2 days' WHERE name LIKE 'publication-%'");
+  const fresh = await upload();
+  const { body: { revision } } = await admin.get('/api/data').expect(200);
+  await admin.post('/api/save').send({ revision, data: { sections: [{ id: 'pubs', title: 'Pubs', type: 'pub', items: [{ title: 'Paper', year: 2026, authors: [], pdf: kept }] }] } }).expect(200);
+  assert.ok(await storage.readPdf(`publication-${kept}.pdf`));
+  assert.equal(await storage.readPdf(`publication-${orphan}.pdf`), undefined);
+  assert.ok(await storage.readPdf(`publication-${fresh}.pdf`));
+  assert.ok(await storage.readPdf('resume.pdf'));
+});

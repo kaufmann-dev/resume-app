@@ -156,7 +156,7 @@ export function mountMcp(app, { storage, store, requireAdmin }) {
     const itemSchemaFor = section => section.type === 'info' ? rowSchema : section.type === 'pub' ? pubSchema : entrySchema;
     const childKeyFor = section => section.type === 'info' ? 'rows' : 'items';
     server.registerTool('put_item', {
-      description: 'Create or replace one whole row/item inside a section (full value: info sections take {label, value}, entries take heading/subheading/info/subinfo/highlights/tags, pub takes {authors, year, title, institution}). Without index the item is appended; with index it replaces that entry (index equal to the length appends). Requires the revision from any read. For single-field edits use patch_document.',
+      description: 'Create or replace one whole row/item inside a section (full value: info sections take {label, value}, entries take heading/subheading/info/subinfo/highlights/tags, pub takes {authors, year, title, institution, pdf}; pdf is the optional id of a PDF uploaded in the admin editor, removed to detach it, and cannot be uploaded through MCP). Without index the item is appended; with index it replaces that entry (index equal to the length appends). Requires the revision from any read. For single-field edits use patch_document.',
       inputSchema: { revision: z.string(), sectionId: z.string().min(1), item: itemSchema, index: z.number().int().min(0).optional() },
       outputSchema: { revision: z.string(), sectionId: z.string(), index: z.number(), item: itemSchema }
     }, async ({ revision, sectionId, item, index }) => {

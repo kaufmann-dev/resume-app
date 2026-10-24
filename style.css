@@ -518,6 +518,17 @@ header {
   padding: 8px 0 14px;
 }
 
+.pub-pdf {
+  margin-left: 4px;
+  color: var(--t1);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border2);
+}
+
+.pub-pdf:hover {
+  border-bottom-color: var(--t1);
+}
+
 .e-mob {
   display: none;
 }
@@ -580,7 +591,8 @@ body.is-auth-view #legal-footer {
   }
 
   .toolbar-wrap,
-  .section-nav {
+  .section-nav,
+  .pub-pdf {
     display: none !important;
   }
 

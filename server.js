@@ -1,12 +1,13 @@
 import { createPool, initializeStorage, PostgresSessionStore } from './storage.js';
 import { asyncHandler } from './async-handler.js';
-import { createDocumentStore } from './document-store.js';
+import { createDocumentStore, publicationPdfName } from './document-store.js';
 import { mountMcp } from './mcp.js';
 import { renderErrorPage } from './error-page.js';
 import express from 'express';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'url';
 import {
   ABSOLUTE_SESSION_MS,
@@ -47,6 +48,13 @@ function isAllowedBrowserOrigin(origin) {
 }
 
 const PDF_LIMIT_BYTES = 10 * 1024 * 1024;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PDF_RESPONSE_HEADERS = {
+  'Cache-Control': 'private, no-store, no-cache, must-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+  'X-Content-Type-Options': 'nosniff'
+};
 
 function validateViewerPasscode(passcodes, passcode, now) {
   if (!passcode) {
@@ -374,12 +382,7 @@ export function createApp({
       return response.status(404).send('PDF not found');
     }
 
-    response.set({
-      'Cache-Control': 'private, no-store, no-cache, must-revalidate',
-      Pragma: 'no-cache',
-      Expires: '0',
-      'X-Content-Type-Options': 'nosniff'
-    });
+    response.set(PDF_RESPONSE_HEADERS);
 
     return response.attachment(PDF_DOWNLOAD_NAME).type('application/pdf').send(pdf.bytes);
   }));
@@ -391,19 +394,45 @@ export function createApp({
     return response.json({ file: PDF_NAME, exists: true, size: pdf.bytes.length, updatedAt: pdf.updatedAt.toISOString() });
   }));
 
-  app.post('/api/pdf',
+  const pdfUpload = [
     (request, response, next) => { if (requireAdmin(request, response)) next(); },
     express.raw({ type: 'application/pdf', limit: PDF_LIMIT_BYTES }),
-    asyncHandler(async (request, response) => {
+    (request, response, next) => {
       if (!Buffer.isBuffer(request.body) || !request.body.length) {
         return response.status(400).json({ error: 'Upload a PDF file with Content-Type: application/pdf' });
       }
       if (request.body.subarray(0, 5).toString('latin1') !== '%PDF-') {
         return response.status(400).json({ error: 'Uploaded file is not a valid PDF' });
       }
-      const metadata = await storage.writePdf(PDF_NAME, request.body);
-      return response.json({ success: true, file: PDF_NAME, ...metadata });
-    }));
+      return next();
+    }
+  ];
+
+  app.post('/api/pdf', ...pdfUpload, asyncHandler(async (request, response) => {
+    const metadata = await storage.writePdf(PDF_NAME, request.body);
+    return response.json({ success: true, file: PDF_NAME, ...metadata });
+  }));
+
+  // Uploads stay unreferenced until the editor saves the returned id into a publication.
+  app.post('/api/publication-pdf', ...pdfUpload, asyncHandler(async (request, response) => {
+    const id = randomUUID();
+    const metadata = await storage.writePdf(publicationPdfName(id), request.body);
+    return response.json({ success: true, id, ...metadata });
+  }));
+
+  app.get('/api/publication-pdf/:id', asyncHandler(async (request, response) => {
+    if (!requireAuthenticated(request, response)) return;
+    const { id } = request.params;
+    const pdf = UUID_PATTERN.test(id) ? await storage.readPdf(publicationPdfName(id)) : undefined;
+    if (!pdf) return response.status(404).json({ error: 'PDF not found' });
+    const publication = (await store.read()).data.sections
+      .flatMap(section => section.type === 'pub' ? section.items : [])
+      .find(item => item.pdf === id);
+    const title = publication?.title;
+    const name = (typeof title === 'string' ? title : title?.en ?? title?.de ?? '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'publication';
+    response.set({ ...PDF_RESPONSE_HEADERS, 'Content-Disposition': `inline; filename="${name}.pdf"` });
+    return response.type('application/pdf').send(pdf.bytes);
+  }));
 
   app.get('/api/data', asyncHandler(async (request, response) => {
     if (requireAdmin(request, response)) response.json(await store.read());

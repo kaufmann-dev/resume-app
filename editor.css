@@ -719,6 +719,17 @@ select.ed-input {
   max-width: 100%;
 }
 
+.ed-pub-pdf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ed-pub-pdf-actions input {
+  max-width: 100%;
+}
+
 .ed-pc-status {
   flex-shrink: 0;
   padding: 2px 6px;

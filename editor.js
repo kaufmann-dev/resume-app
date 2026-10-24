@@ -298,7 +298,7 @@ function renderEntriesEditor(section, onDataChange) {
   return wrap;
 }
 
-function renderPubCard(pub, index, items, onDataChange, rebuildList) {
+function renderPubCard(pub, index, items, onDataChange, rebuildList, buildApiUrl) {
   const card = h('div', { className: 'ed-item-card' });
   const authorStr = (pub.authors || []).map(a => a.name).join(' & ');
   const header = h('div', { className: 'ed-item-header' });
@@ -354,19 +354,66 @@ function renderPubCard(pub, index, items, onDataChange, rebuildList) {
 
   body.appendChild(contentField('Title', pub, 'title', v => { onDataChange(); }));
   body.appendChild(contentField('Institution', pub, 'institution', v => { onDataChange(); }));
+  body.appendChild(renderPubPdf(pub, onDataChange, buildApiUrl));
 
   card.appendChild(body);
   return card;
 }
 
-function renderPubEditor(section, onDataChange) {
+// Uploading stores the file and returns its id; the publication references it once content is saved.
+function renderPubPdf(pub, onDataChange, buildApiUrl) {
+  const group = h('div', { className: 'ed-field-group' });
+  function rebuild() {
+    const status = pub.pdf
+      ? h('p', { className: 'ed-help' }, 'PDF attached · ', h('a', { href: String(buildApiUrl(`/api/publication-pdf/${pub.pdf}`)), target: '_blank', rel: 'noopener' }, 'Open'))
+      : h('p', { className: 'ed-help' }, 'No PDF attached.');
+    const input = h('input', { type: 'file', accept: 'application/pdf,.pdf', 'aria-label': 'Publication PDF file' });
+    const upload = h('button', { className: 'ed-btn', type: 'button' }, pub.pdf ? 'Replace PDF' : 'Upload PDF');
+    upload.addEventListener('click', async () => {
+      const file = input.files[0];
+      if (!file) { showToast('Choose a PDF file first', true); return; }
+      if (file.size > 10 * 1024 * 1024) { showToast('PDF exceeds the 10 MB limit', true); return; }
+      upload.disabled = true;
+      upload.textContent = 'Uploading…';
+      try {
+        const response = await fetch(buildApiUrl('/api/publication-pdf'), {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/pdf' },
+          body: file
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        pub.pdf = result.id;
+        onDataChange();
+        rebuild();
+        showToast('PDF attached. Save to publish.');
+      } catch (error) {
+        showToast(error.message, true);
+        upload.disabled = false;
+        upload.textContent = pub.pdf ? 'Replace PDF' : 'Upload PDF';
+      }
+    });
+    const actions = h('div', { className: 'ed-pub-pdf-actions' }, input, upload);
+    if (pub.pdf) actions.appendChild(h('button', { className: 'ed-btn ed-btn--danger', type: 'button', onClick: () => {
+      delete pub.pdf;
+      if (pub.fieldVisibility) delete pub.fieldVisibility.pdf;
+      onDataChange();
+      rebuild();
+    } }, 'Remove'));
+    group.replaceChildren(h('div', { className: 'ed-field-heading' }, h('span', { className: 'ed-field-label' }, 'PDF'), visibilityControl(pub, onDataChange, 'pdf')), status, actions);
+  }
+  rebuild();
+  return group;
+}
+
+function renderPubEditor(section, onDataChange, buildApiUrl) {
   const wrap = h('div');
   const items = section.items || [];
 
   function rebuildList() {
     wrap.innerHTML = '';
     const list = h('div', { className: 'ed-items-list' });
-    items.forEach((pub, i) => list.appendChild(renderPubCard(pub, i, items, onDataChange, rebuildList)));
+    items.forEach((pub, i) => list.appendChild(renderPubCard(pub, i, items, onDataChange, rebuildList, buildApiUrl)));
     wrap.appendChild(list);
     wrap.appendChild(h('button', {
       className: 'ed-btn ed-add-btn', onClick: () => {
@@ -871,7 +918,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
       } else if (sec.type === 'entries') {
         main.appendChild(renderEntriesEditor(sec, onDataChange));
       } else if (sec.type === 'pub') {
-        main.appendChild(renderPubEditor(sec, onDataChange));
+        main.appendChild(renderPubEditor(sec, onDataChange, buildApiUrl));
       }
     }
 
