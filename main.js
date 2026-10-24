@@ -183,6 +183,10 @@ function mkEntry(item) {
   </div>`;
 }
 
+function escapeAttribute(value) {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function sectionAnchor(section) {
   return `section-${section.id}`;
 }
@@ -201,7 +205,9 @@ function mkSection(section) {
         const authors = (pub.authors || []).filter(a => a.name).map(a => a.bold ? `<strong>${a.name}</strong>` : a.name).join(' &amp; ');
         const title = localize(pub.title);
         const institution = localize(pub.institution);
-        return `<div class="pub">${authors}${pub.year ? ` (${pub.year})` : ''}${authors || pub.year ? '. ' : ''}${title ? `<em>${title}</em>` : ''}${institution ? ` ${institution}.` : ''}</div>`;
+        const pdfLabel = escapeAttribute(`${localize({ en: 'Open PDF', de: 'PDF öffnen' })}${title ? `: ${title}` : ''}`);
+        const pdf = pub.pdf ? ` <a class="pub-pdf" href="${buildApiUrl(`/api/publication-pdf/${pub.pdf}`)}" target="_blank" rel="noopener" aria-label="${pdfLabel}">PDF</a>` : '';
+        return `<div class="pub">${authors}${pub.year ? ` (${pub.year})` : ''}${authors || pub.year ? '. ' : ''}${title ? `<em>${title}</em>` : ''}${institution ? ` ${institution}.` : ''}${pdf}</div>`;
       }).join('');
 
     }

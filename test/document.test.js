@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createDocumentStore } from '../document-store.js';
+import { createDocumentStore, pubSchema } from '../document-store.js';
 import { projectDocument, renderMarkdown } from '../document-model.js';
 
 const section = items => ({ sections: [{ id: 'work', title: 'Work', type: 'entries', items }] });
@@ -17,6 +17,15 @@ test('parent, field, author, tag and bullet visibility are applied before delive
   const publications = { sections: [{ id: 'pub', title: 'Pubs', type: 'pub', items: [{ title: 'Paper', year: 2026, authors: [{ name: 'A', visibility: 'full' }] }] }] };
   assert.deepEqual(projectDocument(publications, 'compact').sections[0].items[0].authors, []);
   assert.deepEqual(projectDocument(publications, 'full').sections[0].items[0].authors, [{ name: 'A' }]);
+});
+test('publication PDFs are UUID references with their own field visibility', () => {
+  const pdf = '0b5c7f0e-8f3a-4c1d-9a2b-3c4d5e6f7a8b';
+  const item = { title: 'Paper', year: 2026, authors: [], pdf };
+  assert.equal(pubSchema.parse(item).pdf, pdf);
+  assert.throws(() => pubSchema.parse({ ...item, pdf: 'not-an-id' }));
+  const publications = { sections: [{ id: 'pub', title: 'Pubs', type: 'pub', items: [{ ...item, fieldVisibility: { pdf: 'full' } }] }] };
+  assert.equal('pdf' in projectDocument(publications, 'compact').sections[0].items[0], false);
+  assert.equal(projectDocument(publications, 'full').sections[0].items[0].pdf, pdf);
 });
 test('import is one-time, retains originals, and rejects stale or invalid writes', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'document-test-'));
