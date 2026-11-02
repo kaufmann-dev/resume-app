@@ -316,7 +316,7 @@ header {
 .sec {
   margin-top: 24px;
   padding-top: 24px;
-  border-top: 1px solid color-mix(in oklch, var(--border), var(--t1) 15%);
+  border-top: 1px solid var(--border);
   scroll-margin-top: 24px;
 }
 
