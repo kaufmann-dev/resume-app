@@ -1,4 +1,3 @@
-import { asyncHandler } from './async-handler.js';
 import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -16,26 +15,26 @@ const changeSchema = z.object({ op: z.string(), path: z.string().optional(), fro
 export function mountMcp(app, { storage, store, requireAdmin }) {
   const read = () => storage.readCollection('keys');
   const list = async () => (await read()).map(({ hash: secret, ...metadata }) => metadata);
-  app.get('/api/keys', asyncHandler(async (req, res) => {
+  app.get('/api/keys', async (req, res) => {
     if (requireAdmin(req, res)) res.json({ keys: await list() });
-  }));
-  app.post('/api/keys', asyncHandler(async (req, res) => {
+  });
+  app.post('/api/keys', async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const name = req.body?.name;
     if (typeof name !== 'string' || !name.trim() || name.length > 100) return res.status(400).json({ error: 'Provide a key name (1–100 characters)' });
     const key = `cv_${randomBytes(32).toString('base64url')}`;
     await storage.mutateCollection('keys', keys => { keys.push({ id: randomUUID(), name: name.trim(), createdAt: new Date().toISOString(), hash: hash(key).toString('hex') }); });
     res.status(201).json({ key, keys: await list() });
-  }));
-  app.delete('/api/keys/:id', asyncHandler(async (req, res) => {
+  });
+  app.delete('/api/keys/:id', async (req, res) => {
     if (!requireAdmin(req, res)) return;
     await storage.mutateCollection('keys', keys => {
       const index = keys.findIndex(key => key.id === req.params.id);
       if (index >= 0) keys.splice(index, 1);
     });
     res.json({ keys: await list() });
-  }));
-  app.all('/api/mcp', asyncHandler(async (req, res, next) => {
+  });
+  app.all('/api/mcp', async (req, res, next) => {
     const token = /^Bearer (\S+)$/i.exec(req.headers.authorization || '')?.[1];
     if (!token || !(await read()).some(key => timingSafeEqual(Buffer.from(key.hash, 'hex'), hash(token)))) {
       return res.status(401).set('WWW-Authenticate', 'Bearer').json({ error: 'Valid API key required' });
@@ -215,5 +214,5 @@ export function mountMcp(app, { storage, store, requireAdmin }) {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) { next(error); }
-  }));
+  });
 }
