@@ -1,5 +1,4 @@
 import { createPool, initializeStorage, PostgresSessionStore } from './storage.js';
-import { asyncHandler } from './async-handler.js';
 import { createDocumentStore, publicationPdfName } from './document-store.js';
 import { mountMcp } from './mcp.js';
 import { renderErrorPage } from './error-page.js';
@@ -184,7 +183,7 @@ export function createApp({
     }
   });
 
-  app.use(asyncHandler(async (request, response, next) => {
+  app.use(async (request, response, next) => {
     const auth = request.session.auth;
 
     if (!auth) {
@@ -218,7 +217,7 @@ export function createApp({
 
     request.authContext = auth;
     return next();
-  }));
+  });
 
   function authenticationFailure(request, response) {
     const failure = request.authFailure ?? { status: 401, error: 'Not authenticated' };
@@ -267,7 +266,7 @@ export function createApp({
     return response;
   }
 
-  app.post('/api/auth/passcode', passcodeRateLimiter, asyncHandler(async (request, response, next) => {
+  app.post('/api/auth/passcode', passcodeRateLimiter, async (request, response, next) => {
     const { passcode, validation } = request.viewerPasscodeAttempt
       ?? await getViewerPasscodeAttempt(request);
 
@@ -284,17 +283,17 @@ export function createApp({
     } catch (error) {
       return next(error);
     }
-  }));
+  });
 
-  app.get('/api/session', asyncHandler(async (request, response) => {
+  app.get('/api/session', async (request, response) => {
     if (!requireAuthenticated(request, response, { userDriven: false })) {
       return;
     }
 
     response.json(await buildSessionResponse(request));
-  }));
+  });
 
-  app.get('/auth/login', asyncHandler(async (request, response, next) => {
+  app.get('/auth/login', async (request, response, next) => {
     try {
       const authorization = await oidcService.createAuthorizationRequest();
       const returnTo = getSafeReturnUrl(request, authConfig);
@@ -313,9 +312,9 @@ export function createApp({
     } catch (error) {
       return next(error);
     }
-  }));
+  });
 
-  app.get('/auth/callback', asyncHandler(async (request, response, next) => {
+  app.get('/auth/callback', async (request, response, next) => {
     const transaction = request.session.oidcTransaction;
 
     if (!transaction || now() - transaction.createdAt >= OIDC_TRANSACTION_MS) {
@@ -347,9 +346,9 @@ export function createApp({
       console.error('OIDC callback failed:', error.message);
       return response.status(400).send('OIDC authentication failed');
     }
-  }));
+  });
 
-  app.post('/auth/logout', asyncHandler(async (request, response, next) => {
+  app.post('/auth/logout', async (request, response, next) => {
     const auth = request.authContext;
     const localReturnUrl = getSafeReturnUrl(request, authConfig);
     const idTokenHint = auth?.kind === 'admin' ? auth.id_token_hint : undefined;
@@ -369,9 +368,9 @@ export function createApp({
     } catch (error) {
       return next(error);
     }
-  }));
+  });
 
-  app.get('/api/download', asyncHandler(async (request, response) => {
+  app.get('/api/download', async (request, response) => {
     if (!requireAuthenticated(request, response)) {
       return;
     }
@@ -385,14 +384,14 @@ export function createApp({
     response.set(PDF_RESPONSE_HEADERS);
 
     return response.attachment(PDF_DOWNLOAD_NAME).type('application/pdf').send(pdf.bytes);
-  }));
+  });
 
-  app.get('/api/pdf', asyncHandler(async (request, response) => {
+  app.get('/api/pdf', async (request, response) => {
     if (!requireAdmin(request, response)) return;
     const pdf = await storage.readPdf(PDF_NAME);
     if (!pdf) return response.json({ file: PDF_NAME, exists: false });
     return response.json({ file: PDF_NAME, exists: true, size: pdf.bytes.length, updatedAt: pdf.updatedAt.toISOString() });
-  }));
+  });
 
   const pdfUpload = [
     (request, response, next) => { if (requireAdmin(request, response)) next(); },
@@ -408,19 +407,19 @@ export function createApp({
     }
   ];
 
-  app.post('/api/pdf', ...pdfUpload, asyncHandler(async (request, response) => {
+  app.post('/api/pdf', ...pdfUpload, async (request, response) => {
     const metadata = await storage.writePdf(PDF_NAME, request.body);
     return response.json({ success: true, file: PDF_NAME, ...metadata });
-  }));
+  });
 
   // Uploads stay unreferenced until the editor saves the returned id into a publication.
-  app.post('/api/publication-pdf', ...pdfUpload, asyncHandler(async (request, response) => {
+  app.post('/api/publication-pdf', ...pdfUpload, async (request, response) => {
     const id = randomUUID();
     const metadata = await storage.writePdf(publicationPdfName(id), request.body);
     return response.json({ success: true, id, ...metadata });
-  }));
+  });
 
-  app.get('/api/publication-pdf/:id', asyncHandler(async (request, response) => {
+  app.get('/api/publication-pdf/:id', async (request, response) => {
     if (!requireAuthenticated(request, response)) return;
     const { id } = request.params;
     const pdf = UUID_PATTERN.test(id) ? await storage.readPdf(publicationPdfName(id)) : undefined;
@@ -432,29 +431,29 @@ export function createApp({
     const name = (typeof title === 'string' ? title : title?.en ?? title?.de ?? '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'publication';
     response.set({ ...PDF_RESPONSE_HEADERS, 'Content-Disposition': `inline; filename="${name}.pdf"` });
     return response.type('application/pdf').send(pdf.bytes);
-  }));
+  });
 
-  app.get('/api/data', asyncHandler(async (request, response) => {
+  app.get('/api/data', async (request, response) => {
     if (requireAdmin(request, response)) response.json(await store.read());
-  }));
+  });
 
-  app.post('/api/save', asyncHandler(async (request, response) => {
+  app.post('/api/save', async (request, response) => {
     if (!requireAdmin(request, response)) return;
     try {
       response.json({ success: true, ...await store.write(request.body.data, request.body.revision) });
     } catch (error) {
       response.status(error.status || (error.name === 'ZodError' ? 400 : 500)).json({ error: error.message });
     }
-  }));
+  });
 
   mountMcp(app, { storage, store, requireAdmin });
 
-  app.get('/api/passcodes', asyncHandler(async (request, response) => {
+  app.get('/api/passcodes', async (request, response) => {
     if (!requireAdmin(request, response)) return;
     return response.json({ passcodes: await getPasscodes() });
-  }));
+  });
 
-  app.post('/api/passcodes', asyncHandler(async (request, response) => {
+  app.post('/api/passcodes', async (request, response) => {
     if (!requireAdmin(request, response)) return;
 
     const { code, expires } = request.body;
@@ -465,10 +464,10 @@ export function createApp({
 
     const passcodes = await storage.mutateCollection('passcodes', entries => { entries.push({ code, expires }); });
     return response.json({ success: true, passcodes });
-  }));
+  });
 
   for (const method of ['put', 'delete']) {
-    app[method]('/api/passcodes/:index', asyncHandler(async (request, response) => {
+    app[method]('/api/passcodes/:index', async (request, response) => {
       if (!requireAdmin(request, response)) return;
       const index = Number(request.params.index);
       const { code, expires } = request.body ?? {};
@@ -483,7 +482,7 @@ export function createApp({
         else entries.splice(index, 1);
       });
       response.json({ success: true, passcodes });
-    }));
+    });
   }
 
   app.use(express.static(staticDirectory));

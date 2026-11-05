@@ -16,7 +16,7 @@ A small personal resume app built with Vite on the frontend and Express on the b
 ## Tech Stack
 
 - Frontend: Vite, plain HTML/CSS/JavaScript, Lucide icons
-- Backend: Express
+- Backend: Express 5
 - Runtime dependencies: `express`, `express-session`, `pg`, `openid-client`, `cors`, `@modelcontextprotocol/sdk`, `zod`
 - PostgreSQL stores all persistent application state
 
@@ -138,7 +138,7 @@ Token exchange uses `client_secret_post` for token endpoint authentication (`cli
 
 ### Prerequisites
 
-- Node.js 22.12 or newer
+- Node.js 26
 - npm
 - A reachable PostgreSQL database and `DATABASE_URL`
 
