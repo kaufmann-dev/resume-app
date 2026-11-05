@@ -168,7 +168,7 @@ In local development:
 
 ## Coolify Deployment
 
-- **Build Pack:** Nixpacks; `nixpacks.toml` starts `node server.js`.
+- **Build Pack:** Railpack; `railpack.json` starts `node server.js`.
 - **Base Directory:** `/`. This is a server application, not a static site.
 - **Persistent Storage:** PostgreSQL owns persistent state. Keep `/data` attached for the first import, then remove the app volume after verification. The PostgreSQL service needs its own persistent storage and backups.
 - **Required environment:** all production authentication variables in Authentication Setup (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_CALLBACK_URL`, `OIDC_POST_LOGOUT_URL`, `SESSION_SECRET`), plus `DATABASE_URL` and `NODE_ENV=production`.
