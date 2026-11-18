@@ -1,11 +1,9 @@
 import net from 'node:net';
 import session from 'express-session';
-import * as oidc from 'openid-client';
+import { SITE_ORIGIN } from './site-config.js';
 
 export const IDLE_SESSION_MS = 24 * 60 * 60 * 1000;
 export const ABSOLUTE_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
-export const OIDC_TRANSACTION_MS = 10 * 60 * 1000;
-
 
 function requireEnvironmentValue(environment, name) {
   const value = environment[name]?.trim();
@@ -33,7 +31,7 @@ function isLoopbackHostname(hostname) {
   return normalizedHostname === '::1';
 }
 
-function parseUrl(value, name, { expectedPath, originOnly = false } = {}) {
+function parseUrl(value, name, { originOnly = false } = {}) {
   if (value.includes('\\')) {
     throw new Error(`${name} must not contain backslashes`);
   }
@@ -72,124 +70,37 @@ function parseUrl(value, name, { expectedPath, originOnly = false } = {}) {
     throw new Error(`${name} must be an origin-only URL`);
   }
 
-  if (expectedPath && parsedUrl.pathname !== expectedPath) {
-    throw new Error(`${name} must use the ${expectedPath} path`);
-  }
-
   return parsedUrl;
 }
 
 export function loadAuthConfig(environment = process.env) {
   const production = environment.NODE_ENV === 'production';
+  const origin = parseUrl(requireEnvironmentValue(environment, 'ORIGIN'), 'ORIGIN', { originOnly: true }).origin;
   const issuerUrl = parseUrl(
     requireEnvironmentValue(environment, 'OIDC_ISSUER_URL'),
     'OIDC_ISSUER_URL'
   ).toString();
-  const callbackUrl = parseUrl(
-    requireEnvironmentValue(environment, 'OIDC_CALLBACK_URL'),
-    'OIDC_CALLBACK_URL',
-    { expectedPath: '/auth/callback' }
-  ).toString();
-  const postLogoutUrl = parseUrl(
-    requireEnvironmentValue(environment, 'OIDC_POST_LOGOUT_URL'),
-    'OIDC_POST_LOGOUT_URL',
-    { originOnly: true }
-  ).toString();
   const sessionSecret = requireEnvironmentValue(environment, 'SESSION_SECRET');
+  const authSecret = requireEnvironmentValue(environment, 'BETTER_AUTH_SECRET');
 
-  if (sessionSecret.length < 32) {
-    throw new Error('SESSION_SECRET must be at least 32 characters long');
+  for (const [name, value] of [['SESSION_SECRET', sessionSecret], ['BETTER_AUTH_SECRET', authSecret]]) {
+    if (value.length < 32) {
+      throw new Error(`${name} must be at least 32 characters long`);
+    }
   }
 
-  if (production) {
-    if (callbackUrl !== 'https://resume.kaufmann.dev/auth/callback') {
-      throw new Error('OIDC_CALLBACK_URL must use the registered production callback URL');
-    }
-
-    if (postLogoutUrl !== 'https://resume.kaufmann.dev/') {
-      throw new Error('OIDC_POST_LOGOUT_URL must use the registered production logout URL');
-    }
+  if (production && origin !== SITE_ORIGIN) {
+    throw new Error(`ORIGIN must be ${SITE_ORIGIN} in production`);
   }
 
   return {
+    production,
+    origin,
     issuerUrl,
     clientId: requireEnvironmentValue(environment, 'OIDC_CLIENT_ID'),
     clientSecret: requireEnvironmentValue(environment, 'OIDC_CLIENT_SECRET'),
-    callbackUrl,
-    postLogoutUrl,
-    sessionSecret
-  };
-}
-
-export async function createOidcService(config, oidcClient = oidc) {
-  const issuerUrl = parseUrl(String(config.issuerUrl), 'OIDC_ISSUER_URL');
-  const discoveryOptions = issuerUrl.protocol === 'http:'
-    ? { execute: [oidcClient.allowInsecureRequests] }
-    : undefined;
-  const clientConfig = await oidcClient.discovery(
-    issuerUrl,
-    config.clientId,
-    undefined,
-    oidcClient.ClientSecretPost(config.clientSecret),
-    discoveryOptions
-  );
-  const metadata = clientConfig.serverMetadata();
-
-  if (!metadata.end_session_endpoint) {
-    throw new Error('OIDC provider metadata must include end_session_endpoint');
-  }
-
-  if (
-    Array.isArray(metadata.code_challenge_methods_supported)
-    && !metadata.code_challenge_methods_supported.includes('S256')
-  ) {
-    throw new Error('OIDC provider must support PKCE S256');
-  }
-
-  return {
-    async createAuthorizationRequest() {
-      const codeVerifier = oidcClient.randomPKCECodeVerifier();
-      const codeChallenge = await oidcClient.calculatePKCECodeChallenge(codeVerifier);
-      const state = oidcClient.randomState();
-      const nonce = oidcClient.randomNonce();
-      const authorizationUrl = oidcClient.buildAuthorizationUrl(clientConfig, {
-        redirect_uri: config.callbackUrl,
-        scope: 'openid',
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256',
-        state,
-        nonce
-      });
-
-      return {
-        authorizationUrl,
-        codeVerifier,
-        state,
-        nonce
-      };
-    },
-
-    async exchangeCallback(currentUrl, transaction) {
-      const tokens = await oidcClient.authorizationCodeGrant(clientConfig, currentUrl, {
-        pkceCodeVerifier: transaction.codeVerifier,
-        expectedState: transaction.state,
-        expectedNonce: transaction.nonce,
-        idTokenExpected: true
-      });
-
-      if (typeof tokens.id_token !== 'string' || !tokens.id_token) {
-        throw new Error('OIDC callback did not return an ID token');
-      }
-
-      return { idTokenHint: tokens.id_token };
-    },
-
-    createLogoutUrl(idTokenHint) {
-      return oidcClient.buildEndSessionUrl(clientConfig, {
-        id_token_hint: idTokenHint,
-        post_logout_redirect_uri: config.postLogoutUrl
-      });
-    }
+    sessionSecret,
+    authSecret
   };
 }
 

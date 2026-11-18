@@ -1,6 +1,10 @@
 import { createPool, initializeStorage, PostgresSessionStore } from './storage.js';
 import { createDocumentStore, publicationPdfName } from './document-store.js';
 import { mountMcp } from './mcp.js';
+import { listConnectedApps, revokeConnectedApp } from './connected-apps.js';
+import { ABSOLUTE_ADMIN_SESSION_MS, POCKET_ID_PROVIDER, initAuth, mcpResource } from './oauth.js';
+import { IDENTITY_SCOPES, MCP_SCOPES } from './oauth-scopes.js';
+import { fromNodeHeaders, toNodeHandler } from 'better-auth/node';
 import { renderErrorPage } from './error-page.js';
 import express from 'express';
 import cors from 'cors';
@@ -11,8 +15,6 @@ import { fileURLToPath } from 'url';
 import {
   ABSOLUTE_SESSION_MS,
   IDLE_SESSION_MS,
-  OIDC_TRANSACTION_MS,
-  createOidcService,
   createSessionMiddleware,
   destroySession,
   loadAuthConfig,
@@ -44,6 +46,16 @@ function isAllowedBrowserOrigin(origin) {
   } catch {
     return false;
   }
+}
+
+// OAuth clients and MCP clients call these from any origin without cookies; the auth library and the
+// token verifier protect them. Every other route keeps the credentialed same-origin allowlist.
+const PUBLIC_OAUTH_PATHS = new Set(['/mcp', '/auth/oauth2/token', '/auth/oauth2/register', '/auth/oauth2/revoke']);
+const isPublicOAuthPath = pathname => PUBLIC_OAUTH_PATHS.has(pathname) || pathname.startsWith('/.well-known/');
+const MCP_SERVER_NAME = 'cv_resume';
+
+function forwardSetCookies(headers, response) {
+  for (const cookie of headers?.getSetCookie?.() ?? []) response.append('Set-Cookie', cookie);
 }
 
 const PDF_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -102,14 +114,7 @@ function getSafeReturnUrl(request, authConfig) {
     }
   }
 
-  return new URL('/', authConfig.callbackUrl).toString();
-}
-
-function createCallbackUrl(request, configuredCallbackUrl) {
-  const callbackUrl = new URL(configuredCallbackUrl);
-  const requestUrl = new URL(request.originalUrl, callbackUrl);
-  callbackUrl.search = requestUrl.search;
-  return callbackUrl;
+  return `${authConfig.origin}/`;
 }
 
 function setAuthenticatedSession(request, auth, now) {
@@ -128,8 +133,8 @@ function markUserActivity(request, now) {
 }
 
 export function createApp({
+  auth,
   authConfig,
-  oidcService,
   sessionStore,
   storage,
   staticDirectory = path.join(__dirname, 'dist'),
@@ -149,25 +154,77 @@ export function createApp({
     };
   };
 
+  const mcpUrl = mcpResource(authConfig.origin);
+  const authHandler = toNodeHandler(auth);
+  const publicCors = cors({ exposedHeaders: ['WWW-Authenticate'] });
+  const browserCors = cors({
+    origin(origin, callback) {
+      callback(null, !origin || isAllowedBrowserOrigin(origin));
+    },
+    credentials: true
+  });
+
   app.set('trust proxy', 1);
   app.use((request, response, next) => {
+    if (isPublicOAuthPath(request.path)) return publicCors(request, response, next);
     const origin = request.headers.origin;
 
     if (origin && !isAllowedBrowserOrigin(origin)) {
       return response.status(403).json({ error: 'Request origin is not allowed' });
     }
 
-    return next();
+    return browserCors(request, response, next);
   });
-  app.use(cors({
-    origin(origin, callback) {
-      callback(null, !origin || isAllowedBrowserOrigin(origin));
-    },
-    credentials: true
-  }));
-  app.use(express.json({ limit: '2mb' }));
   app.use('/api', (request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.use(createSessionMiddleware(authConfig, sessionStore));
+
+  app.get('/auth/login', async (request, response, next) => {
+    try {
+      const { headers, response: result } = await auth.api.signInSocial({
+        body: { provider: POCKET_ID_PROVIDER, callbackURL: getSafeReturnUrl(request, authConfig) },
+        headers: fromNodeHeaders(request.headers),
+        returnHeaders: true
+      });
+      forwardSetCookies(headers, response);
+      return response.redirect(303, result.url);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // Ends viewer and admin sessions; admins continue to the identity provider's logout.
+  app.post('/auth/logout', async (request, response, next) => {
+    const localReturnUrl = getSafeReturnUrl(request, authConfig);
+
+    try {
+      if (request.session.auth) await destroySession(request);
+      const headers = fromNodeHeaders(request.headers);
+      const adminSession = await auth.api.getSession({ headers, query: { disableRefresh: true } });
+      let providerLogoutUrl;
+
+      if (adminSession) {
+        const result = await auth.api.signOut({ headers, body: { callbackURL: `${authConfig.origin}/` }, returnHeaders: true });
+        forwardSetCookies(result.headers, response);
+        providerLogoutUrl = result.response?.url;
+      }
+
+      return response.redirect(303, providerLogoutUrl ?? localReturnUrl);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // OAuth discovery (RFC 8414, RFC 9728, OpenID) lives at the origin root, outside /auth.
+  app.get('/.well-known/*splat', authHandler);
+  app.all('/auth/*splat', authHandler);
+  mountMcp(app, { auth, store, resource: mcpUrl });
+  for (const page of ['/oauth/sign-in', '/oauth/consent']) {
+    app.get(page, (request, response) => {
+      response.set('Cache-Control', 'no-store');
+      response.sendFile(path.join(staticDirectory, 'oauth.html'));
+    });
+  }
+  app.use(express.json({ limit: '2mb' }));
 
   const passcodeRateLimiter = rateLimit({
     windowMs: PASSCODE_RATE_LIMIT_WINDOW_MS,
@@ -183,23 +240,43 @@ export function createApp({
     }
   });
 
-  app.use(async (request, response, next) => {
-    const auth = request.session.auth;
+  app.use('/api', async (request, response, next) => {
+    try {
+      // Background session checks must not extend the admin's idle limit.
+      const result = await auth.api.getSession({
+        headers: fromNodeHeaders(request.headers),
+        query: { disableRefresh: request.method === 'GET' && request.path === '/session' },
+        returnHeaders: true
+      });
+      forwardSetCookies(result.headers, response);
+      const adminSession = result.response;
 
-    if (!auth) {
+      if (adminSession) {
+        if (now() - new Date(adminSession.session.createdAt).getTime() < ABSOLUTE_ADMIN_SESSION_MS) {
+          request.authContext = { kind: 'admin', userId: adminSession.user.id };
+          return next();
+        }
+
+        await (await auth.$context).internalAdapter.deleteSession(adminSession.session.token);
+        request.authFailure = { status: 401, error: 'Session has expired' };
+        return next();
+      }
+    } catch (error) {
+      return next(error);
+    }
+
+    const viewer = request.session.auth;
+
+    if (!viewer) {
       return next();
     }
 
     const currentTime = now();
-    const absoluteExpired = currentTime - auth.createdAt >= ABSOLUTE_SESSION_MS;
-    const idleExpired = currentTime - auth.lastActiveAt >= IDLE_SESSION_MS;
-    let validation = { ok: true };
-
-    if (auth.kind === 'viewer') {
-      validation = validateViewerPasscode(await getPasscodes(), auth.passcode, currentTime);
-    } else if (auth.kind !== 'admin' || typeof auth.id_token_hint !== 'string') {
-      validation = { ok: false, status: 401, error: 'Not authenticated' };
-    }
+    const absoluteExpired = currentTime - viewer.createdAt >= ABSOLUTE_SESSION_MS;
+    const idleExpired = currentTime - viewer.lastActiveAt >= IDLE_SESSION_MS;
+    const validation = viewer.kind === 'viewer'
+      ? validateViewerPasscode(await getPasscodes(), viewer.passcode, currentTime)
+      : { ok: false, status: 401, error: 'Not authenticated' };
 
     if (absoluteExpired || idleExpired || !validation.ok) {
       request.authFailure = validation.ok
@@ -215,7 +292,7 @@ export function createApp({
       return next();
     }
 
-    request.authContext = auth;
+    request.authContext = viewer;
     return next();
   });
 
@@ -230,7 +307,7 @@ export function createApp({
       return false;
     }
 
-    if (userDriven) {
+    if (userDriven && request.authContext.kind === 'viewer') {
       markUserActivity(request, now());
     }
 
@@ -291,83 +368,6 @@ export function createApp({
     }
 
     response.json(await buildSessionResponse(request));
-  });
-
-  app.get('/auth/login', async (request, response, next) => {
-    try {
-      const authorization = await oidcService.createAuthorizationRequest();
-      const returnTo = getSafeReturnUrl(request, authConfig);
-
-      await regenerateSession(request);
-      request.session.oidcTransaction = {
-        codeVerifier: authorization.codeVerifier,
-        state: authorization.state,
-        nonce: authorization.nonce,
-        createdAt: now(),
-        returnTo
-      };
-      request.session.cookie.maxAge = OIDC_TRANSACTION_MS;
-      await saveSession(request);
-      return response.redirect(303, authorization.authorizationUrl.toString());
-    } catch (error) {
-      return next(error);
-    }
-  });
-
-  app.get('/auth/callback', async (request, response, next) => {
-    const transaction = request.session.oidcTransaction;
-
-    if (!transaction || now() - transaction.createdAt >= OIDC_TRANSACTION_MS) {
-      return response.status(400).send('OIDC login transaction is missing or expired');
-    }
-
-    try {
-      const result = await oidcService.exchangeCallback(
-        createCallbackUrl(request, authConfig.callbackUrl),
-        transaction
-      );
-      const returnTo = transaction.returnTo;
-
-      await regenerateSession(request);
-      setAuthenticatedSession(
-        request,
-        { kind: 'admin', id_token_hint: result.idTokenHint },
-        now()
-      );
-      await saveSession(request);
-      return response.redirect(303, returnTo);
-    } catch (error) {
-      try {
-        await destroySession(request);
-      } catch (destroyError) {
-        return next(destroyError);
-      }
-
-      console.error('OIDC callback failed:', error.message);
-      return response.status(400).send('OIDC authentication failed');
-    }
-  });
-
-  app.post('/auth/logout', async (request, response, next) => {
-    const auth = request.authContext;
-    const localReturnUrl = getSafeReturnUrl(request, authConfig);
-    const idTokenHint = auth?.kind === 'admin' ? auth.id_token_hint : undefined;
-
-    try {
-      await destroySession(request);
-    } catch (error) {
-      return next(error);
-    }
-
-    try {
-      const logoutUrl = idTokenHint
-        ? oidcService.createLogoutUrl(idTokenHint)
-        : undefined;
-
-      return response.redirect(303, logoutUrl?.toString() ?? localReturnUrl);
-    } catch (error) {
-      return next(error);
-    }
   });
 
   app.get('/api/download', async (request, response) => {
@@ -446,7 +446,16 @@ export function createApp({
     }
   });
 
-  mountMcp(app, { storage, store, requireAdmin });
+  app.get('/api/mcp', async (request, response) => {
+    if (!requireAdmin(request, response)) return;
+    response.json({ url: mcpUrl, serverName: MCP_SERVER_NAME, scopes: { ...IDENTITY_SCOPES, ...MCP_SCOPES }, apps: await listConnectedApps(storage.pool, request.authContext.userId) });
+  });
+
+  app.delete('/api/mcp/apps/:clientId', async (request, response) => {
+    if (!requireAdmin(request, response)) return;
+    await revokeConnectedApp(storage.pool, request.authContext.userId, request.params.clientId);
+    response.json({ apps: await listConnectedApps(storage.pool, request.authContext.userId) });
+  });
 
   app.get('/api/passcodes', async (request, response) => {
     if (!requireAdmin(request, response)) return;
@@ -519,9 +528,9 @@ export async function startServer() {
   let sessionStore;
   try {
     const storage = await initializeStorage({ pool, baseDirectory: __dirname });
-    const oidcService = await createOidcService(authConfig);
+    const auth = await initAuth(authConfig, pool);
     sessionStore = new PostgresSessionStore(pool);
-    const app = createApp({ authConfig, oidcService, sessionStore, storage });
+    const app = createApp({ auth, authConfig, sessionStore, storage });
     const port = Number(process.env.PORT) || 3001;
     const server = app.listen(port, () => console.log(`Server running on port ${port}`));
     const shutdown = () => {

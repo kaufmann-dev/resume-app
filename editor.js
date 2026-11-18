@@ -450,8 +450,7 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
   isEditorOpen = false;
   let data = structuredClone(initialDocument.data);
   let revision = initialDocument.revision;
-  let keys = [];
-  let keysLoaded = false;
+  let mcpInfo = null;
   let passcodes = JSON.parse(JSON.stringify(passcodesData || []));
   let activeDoc = 'content';
   let selectedIdx = 0;
@@ -621,73 +620,90 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     return wrap;
   }
 
-  async function keyRequest(method = 'GET', id = '', name) {
-    const response = await fetch(buildApiUrl('/api/keys' + (id ? `/${id}` : '')), {
-      method, credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      ...(method === 'POST' ? { body: JSON.stringify({ name }) } : {})
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error);
-    keys = result.keys;
-    keysLoaded = true;
-    return result;
+  async function mcpRequest(method = 'GET', clientId = '') {
+    const response = await fetch(buildApiUrl('/api/mcp' + (clientId ? `/apps/${encodeURIComponent(clientId)}` : '')), { method, credentials: 'include' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'Request failed');
+    mcpInfo = method === 'GET' ? result : { ...mcpInfo, apps: result.apps };
+    return mcpInfo;
   }
 
-  function renderApiKeys() {
-    const wrap = h('div', { className: 'ed-settings-page' });
-    wrap.appendChild(h('header', { className: 'ed-page-heading' }, h('h1', {}, 'API Keys'),
-      h('p', {}, 'Connect your AI tools to your resume. Each key can read and edit all content.')));
-    const createPanel = h('section', { className: 'ed-panel' }, h('h2', {}, 'Create a key'),
-      h('p', { className: 'ed-help' }, 'Give each connection its own name so you can revoke it later.'));
-    const name = h('input', { id: 'ed-key-name', className: 'ed-input', placeholder: 'e.g. Web terminal', maxlength: '100', required: '' });
-    const form = h('form', { className: 'ed-key-form' });
-    const secret = h('div', { className: 'ed-key-secret', role: 'status' });
-    secret.hidden = true;
-    const create = h('button', { className: 'ed-btn ed-btn--save', type: 'submit' }, 'Create key');
-    form.append(h('label', { htmlFor: 'ed-key-name', className: 'ed-field-label' }, 'Key name'), h('div', { className: 'ed-key-form-row' }, name, create));
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (!name.value.trim()) { name.focus(); return; }
-      create.disabled = true;
-      create.textContent = 'Creating…';
-      try {
-        const result = await keyRequest('POST', '', name.value.trim());
-        name.value = '';
-        secret.hidden = false;
-        secret.replaceChildren(h('h3', {}, 'Your key is ready'), h('p', { className: 'ed-help' }, 'Copy it now. You will not be able to view it again.'), copyField('New API key', result.key));
-        renderKeys();
-      } catch (error) { showToast(error.message, true); }
-      finally { create.disabled = false; create.textContent = 'Create key'; }
-    });
-    createPanel.append(form, secret);
-    wrap.appendChild(createPanel);
-    const count = h('span', { className: 'ed-visibility-badge' });
-    const list = h('div', { className: 'ed-key-list', 'aria-live': 'polite' }, h('p', { className: 'ed-help' }, 'Loading keys…'));
-    const keysPanel = h('section', { className: 'ed-panel' }, h('div', { className: 'ed-panel-heading' }, h('h2', {}, 'Active keys'), count), list);
-    function renderKeys() {
-      count.textContent = String(keys.length);
-      list.replaceChildren();
-      if (!keys.length) list.appendChild(h('p', { className: 'ed-help' }, 'No API keys yet. Create one to connect your first tool.'));
-      keys.forEach(key => {
-        const revoke = h('button', { className: 'ed-btn ed-btn--danger', onClick: async () => {
-          if (!await confirmDialog(`Revoke “${key.name}”? Its connection will stop working immediately.`, 'Revoke key')) return;
-          revoke.disabled = true;
-          try { await keyRequest('DELETE', key.id); renderKeys(); }
-          catch (error) { showToast(error.message, true); revoke.disabled = false; }
-        } }, 'Revoke');
-        list.appendChild(h('div', { className: 'ed-key-row' }, h('div', { className: 'ed-key-info' }, h('strong', {}, key.name),
-          h('span', { className: 'ed-help' }, 'Created ' + new Date(key.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))), revoke));
-      });
+  function formatDate(value) {
+    return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function renderMcpConnect(info) {
+    const { url, serverName } = info;
+    const client = (title, ...body) => h('div', { className: 'ed-mcp-client' }, h('h3', {}, title), ...body);
+    return h('section', { className: 'ed-panel', 'aria-labelledby': 'ed-mcp-heading' },
+      h('h2', { id: 'ed-mcp-heading' }, 'MCP server'),
+      h('p', { className: 'ed-help' }, 'Add this URL as a remote MCP server (Streamable HTTP). The app opens a browser window where you sign in with Pocket ID and approve its access. No API key is needed.'),
+      copyField('MCP URL', url),
+      client('Claude Code',
+        copyField('Claude Code command', `claude mcp add -s user --transport http ${serverName} ${url}`),
+        h('p', { className: 'ed-help' }, 'Then run ', h('code', { className: 'ed-code' }, '/mcp'), ' and choose Authenticate.')),
+      client('Codex',
+        copyField('Codex command', `codex mcp add ${serverName} --url ${url}`),
+        h('p', { className: 'ed-help' }, 'Then run ', h('code', { className: 'ed-code' }, `codex mcp login ${serverName}`), '.')),
+      client('Claude (web and desktop)',
+        h('p', { className: 'ed-help' }, 'Customize → Connectors → + → Add custom connector, then paste the MCP URL. Claude opens the sign-in window when you connect.')),
+      client('ChatGPT',
+        h('p', { className: 'ed-help' }, 'Settings → Apps → Advanced settings → enable Developer mode, then choose Create app and enter the MCP URL with OAuth authentication.')));
+  }
+
+  function renderConnectedApps(panel) {
+    const { apps, scopes } = mcpInfo;
+    const count = h('span', { className: 'ed-visibility-badge' }, String(apps.length));
+    panel.replaceChildren(
+      h('div', { className: 'ed-panel-heading' }, h('h2', {}, 'Connected apps'), count),
+      h('p', { className: 'ed-help' }, 'Revoking stops the app from refreshing its access; any token it already holds expires within 15 minutes.'));
+    if (!apps.length) {
+      panel.appendChild(h('p', { className: 'ed-help ed-mcp-empty' }, 'No apps connected yet. Use the steps above to connect one.'));
+      return;
     }
-    if (!keysLoaded) keyRequest().then(renderKeys).catch(error => {
-      list.replaceChildren(h('p', { role: 'alert' }, error.message), h('button', { className: 'ed-btn', onClick: () => renderEditor() }, 'Retry'));
+    const rows = apps.map(app => {
+      const revoke = h('button', { className: 'ed-btn ed-btn--danger', type: 'button', 'aria-label': `Revoke ${app.name}` }, 'Revoke');
+      revoke.addEventListener('click', async () => {
+        if (!await confirmDialog(`Revoke “${app.name}”? It will need your approval again to use the MCP server.`, 'Revoke access')) return;
+        revoke.disabled = true;
+        revoke.textContent = 'Revoking…';
+        try {
+          await mcpRequest('DELETE', app.clientId);
+          showToast(`${app.name} revoked`);
+          renderConnectedApps(panel);
+        } catch (error) {
+          showToast(error.message, true);
+          revoke.disabled = false;
+          revoke.textContent = 'Revoke';
+        }
+      });
+      return h('tr', {},
+        h('td', { 'data-label': 'App' }, h('strong', {}, app.name), app.uri ? h('span', { className: 'ed-help' }, app.uri) : null),
+        h('td', { 'data-label': 'Access' }, h('ul', { className: 'ed-mcp-scopes' }, app.scopes.map(scope => h('li', {}, scopes[scope] ?? scope)))),
+        h('td', { 'data-label': 'Authorized' }, formatDate(app.grantedAt)),
+        h('td', { className: 'ed-mcp-action' }, revoke));
     });
-    else renderKeys();
-    wrap.appendChild(keysPanel);
-    wrap.appendChild(h('section', { className: 'ed-panel' }, h('h2', {}, 'Connect an MCP client'),
-      h('p', { className: 'ed-help' }, 'Choose Streamable HTTP in your client and use the endpoint below.'),
-      copyField('Server URL', String(buildApiUrl('/api/mcp'))),
-      h('p', { className: 'ed-help' }, 'Authorization header'), h('code', { className: 'ed-code' }, 'Bearer YOUR_API_KEY')));
+    panel.appendChild(h('table', { className: 'ed-mcp-table' },
+      h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'App'), h('th', { scope: 'col' }, 'Access'), h('th', { scope: 'col' }, 'Authorized'), h('th', { scope: 'col' }, h('span', { className: 'ed-sr-only' }, 'Actions')))),
+      h('tbody', {}, rows)));
+  }
+
+  function renderMcp() {
+    const wrap = h('div', { className: 'ed-settings-page' });
+    wrap.appendChild(h('header', { className: 'ed-page-heading' }, h('h1', {}, 'MCP'),
+      h('p', {}, 'Connect AI apps to read and edit your résumé.')));
+    const connect = h('div', {}, h('section', { className: 'ed-panel' }, h('p', { className: 'ed-help' }, 'Loading connection details…')));
+    const apps = h('section', { className: 'ed-panel', 'aria-live': 'polite' });
+    wrap.append(connect, apps);
+    const show = () => {
+      connect.replaceChildren(renderMcpConnect(mcpInfo));
+      renderConnectedApps(apps);
+    };
+    if (mcpInfo) show();
+    else mcpRequest().then(show).catch(error => {
+      connect.replaceChildren(h('section', { className: 'ed-panel' }, h('p', { role: 'alert' }, error.message), h('button', { className: 'ed-btn', type: 'button', onClick: () => renderEditor() }, 'Retry')));
+      apps.remove();
+    });
     return wrap;
   }
 
@@ -766,8 +782,8 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     // Top bar
     const topbar = h('div', { className: 'ed-topbar' });
     const left = h('div', { className: 'ed-topbar-left' });
-    ['content', 'passcodes', 'api-keys', 'pdf'].forEach(d => {
-      const label = { content: 'Content', passcodes: 'Passcodes', 'api-keys': 'API Keys', pdf: 'PDF' }[d];
+    ['content', 'passcodes', 'mcp', 'pdf'].forEach(d => {
+      const label = { content: 'Content', passcodes: 'Passcodes', mcp: 'MCP', pdf: 'PDF' }[d];
       const tab = h('button', { className: 'ed-tab' + (d === activeDoc ? ' active' : ''), 'aria-pressed': String(d === activeDoc), onClick: () => switchDoc(d) }, label);
       left.appendChild(tab);
     });
@@ -802,9 +818,9 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     const layout = h('div', { className: 'ed-layout' + (mobileShowDetail ? ' show-detail' : '') });
 
     // Settings modes: no sidebar, just main content
-    if (activeDoc === 'passcodes' || activeDoc === 'api-keys' || activeDoc === 'pdf') {
+    if (activeDoc === 'passcodes' || activeDoc === 'mcp' || activeDoc === 'pdf') {
       const main = h('div', { className: 'ed-main' });
-      main.appendChild(activeDoc === 'api-keys' ? renderApiKeys() : activeDoc === 'pdf' ? renderPdf() : renderPasscodesEditor());
+      main.appendChild(activeDoc === 'mcp' ? renderMcp() : activeDoc === 'pdf' ? renderPdf() : renderPasscodesEditor());
       layout.appendChild(main);
       overlay.appendChild(layout);
       container.appendChild(overlay);

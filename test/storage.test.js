@@ -14,36 +14,45 @@ async function fixture(t) {
   return { directory, ...await database(t, directory, { initialize: false }) };
 }
 const write = (directory, file, value) => fs.writeFileSync(path.join(directory, file), JSON.stringify(value));
-const key = { id: 'existing', name: 'Existing', createdAt: '2026-01-01', hash: 'a'.repeat(64) };
 
-test('migration imports content, keys, passcodes and exact PDF bytes once, leaving originals intact', async t => {
+test('migration imports content, passcodes and exact PDF bytes once, leaving originals intact', async t => {
   const { directory, options, pool } = await fixture(t);
+  const passcodes = [{ code: 'existing-code', expires: '2099-01-01' }];
   write(directory, 'document.json', { sections: [] });
-  write(directory, 'api-keys.json', [key]);
-  write(directory, 'passcodes.json', [{ code: 'existing-code', expires: '2099-01-01' }]);
+  write(directory, 'passcodes.json', passcodes);
   const pdf = Buffer.from([37, 80, 68, 70, 45, 0, 255]);
   fs.writeFileSync(path.join(directory, 'resume.pdf'), pdf);
   const storage = await initializeStorage(options);
-  assert.deepEqual(await storage.readCollection('keys'), [key]);
-  assert.equal((await storage.readCollection('passcodes'))[0].code, 'existing-code');
+  assert.deepEqual(await storage.readCollection('passcodes'), passcodes);
   assert.deepEqual((await storage.readPdf('resume.pdf')).bytes, pdf);
-  await storage.mutateCollection('keys', keys => { keys.length = 0; });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'api-keys.json'))), [key]);
+  await storage.mutateCollection('passcodes', entries => { entries.length = 0; });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'passcodes.json'))), passcodes);
   fs.writeFileSync(path.join(directory, 'document.json'), 'broken');
   await initializeStorage(options);
-  assert.deepEqual(await storage.readCollection('keys'), []);
-  assert.equal((await pool.query('SELECT * FROM app_migrations')).rowCount, 3);
+  assert.deepEqual(await storage.readCollection('passcodes'), []);
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4]);
+  assert.equal((await pool.query("SELECT 1 FROM app_collections WHERE name = 'keys'")).rowCount, 0);
 });
 
-test('volume data takes precedence over old paths, including empty key lists', async t => {
+test('volume data takes precedence over old paths, including empty lists', async t => {
   const { directory, options } = await fixture(t);
   const previous = path.join(directory, 'previous');
   fs.mkdirSync(previous);
   write(previous, 'document.json', { sections: [] });
-  write(previous, 'api-keys.json', [key]);
-  write(directory, 'api-keys.json', []);
+  write(previous, 'passcodes.json', [{ code: 'old-code' }]);
+  write(directory, 'passcodes.json', []);
   const storage = await initializeStorage({ ...options, environment: { DATA_DIRECTORY: previous } });
-  assert.deepEqual(await storage.readCollection('keys'), []);
+  assert.deepEqual(await storage.readCollection('passcodes'), []);
+});
+
+test('API-key hashes from earlier deployments are discarded once', async t => {
+  const { options, pool } = await fixture(t);
+  await initializeStorage(options);
+  await pool.query("INSERT INTO app_collections VALUES ('keys', $1)", [JSON.stringify([{ id: 'old', hash: 'a'.repeat(64) }])]);
+  await pool.query('DELETE FROM app_migrations WHERE version = 4');
+  await initializeStorage(options);
+  assert.equal((await pool.query("SELECT 1 FROM app_collections WHERE name = 'keys'")).rowCount, 0);
+  assert.equal((await pool.query('SELECT 1 FROM app_migrations WHERE version = 4')).rowCount, 1);
 });
 
 test('malformed import rolls back the entire migration and retries successfully', async t => {
@@ -75,7 +84,7 @@ test('visibility migration converts both and cv to all and full once', async t =
   assert.equal(section.items[0].visibility, 'all');
   assert.deepEqual(section.items[0].fieldVisibility, { info: 'full' });
   assert.equal(section.items[0].highlights[0].visibility, 'full');
-  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3]);
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4]);
 });
 
 test('section open defaults are removed once', async t => {
@@ -104,8 +113,8 @@ test('concurrent initialization and writes preserve one migration and reject sta
   const results = await Promise.allSettled([store.write({ sections: [] }, revision), store.write({ sections: [] }, revision)]);
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.find(result => result.status === 'rejected').reason.status, 409);
-  await Promise.all(Array.from({ length: 10 }, (_, index) => storage.mutateCollection('keys', keys => { keys.push({ ...key, id: String(index) }); })));
-  assert.equal((await storage.readCollection('keys')).length, 10);
+  await Promise.all(Array.from({ length: 10 }, (_, index) => storage.mutateCollection('passcodes', entries => { entries.push({ code: String(index) }); })));
+  assert.equal((await storage.readCollection('passcodes')).length, 10);
 });
 
 test('PostgreSQL sessions survive store recreation, expire, and are destroyed without touch renewal', async t => {

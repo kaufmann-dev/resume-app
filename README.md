@@ -11,13 +11,14 @@ A small personal resume app built with Vite on the frontend and Express on the b
 - PDF replacement upload from the admin editor
 - PDF attachments for publications, opened in a new tab by signed-in viewers
 - Content editor with visibility controls for sections, items, fields, bullets, tags, and authors
-- Hosted MCP endpoint with API keys managed in admin API Keys
+- Remote MCP server at `/mcp`: AI apps connect with the URL alone, sign in through Pocket ID, and ask for explicit consent; access is managed in the editor's MCP tab
 
 ## Tech Stack
 
 - Frontend: Vite, plain HTML/CSS/JavaScript, Lucide icons
 - Backend: Express 5
-- Runtime dependencies: `express`, `express-session`, `pg`, `openid-client`, `cors`, `@modelcontextprotocol/sdk`, `zod`
+- Authentication: Better Auth (Pocket ID sign-in, OAuth 2.1 authorization server for MCP clients via `@better-auth/mcp`, `@better-auth/oauth-provider` and `@better-auth/cimd`)
+- Runtime dependencies: `express`, `express-session`, `pg`, `better-auth`, `cors`, `@modelcontextprotocol/server`, `@modelcontextprotocol/node`, `zod`
 - PostgreSQL stores all persistent application state
 
 ## Project Structure
@@ -26,9 +27,16 @@ A small personal resume app built with Vite on the frontend and Express on the b
 resume-app/
 |-- server.js           # Express backend server
 |-- error-page.js       # HTML error pages for browser requests
-|-- auth.js             # OIDC and server-side session configuration
+|-- auth.js             # Environment configuration and viewer session cookies
+|-- oauth.js            # Better Auth: Pocket ID sign-in and the MCP OAuth server
+|-- oauth-scopes.js     # MCP scopes and the tool-to-scope mapping (shared with the consent page)
+|-- oauth-registration.js # Native application type for loopback client registrations
+|-- connected-apps.js   # Listing and revoking a user's authorized MCP clients
 |-- site-config.js      # Production origin and local hostname detection
 |-- index.html          # Frontend entry point
+|-- oauth.html          # OAuth sign-in and consent page (second Vite entry)
+|-- oauth-page.js       # OAuth sign-in and consent logic
+|-- vite.config.js      # Vite multi-page build
 |-- main.js             # Frontend logic
 |-- editor.js           # Visual editor logic
 |-- style.css           # Styling
@@ -36,7 +44,7 @@ resume-app/
 |-- document-store.js   # Validation and revision-checked persistence
 |-- document-model.js   # Visibility projection
 |-- document-patch.js   # RFC 6902 patch and diff for granular edits
-|-- mcp.js              # MCP tools and key management
+|-- mcp.js              # MCP tools and the OAuth-protected /mcp endpoint
 |-- document.json.example # Template for shared content
 |-- passcodes.json.example # Template for passcodes
 |-- resume.pdf          # Initial PDF seed; uploads live in PostgreSQL
@@ -62,27 +70,36 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE
 
 Use a dedicated database reachable from the app container. URL-encode special characters in credentials. Use your provider's connection string and TLS parameters when applicable. The database role needs permission to create tables and indexes in its default schema and to read/write those tables: startup creates them automatically. Keep the existing OIDC and session environment variables.
 
-PostgreSQL is the only runtime store. Content and visibility settings use JSONB with an atomic revision check; passcodes and API-key hashes use JSONB collections with transactional row locks; the résumé and publication PDFs use `bytea`; browser sessions use expiring database rows. All app processes read the database directly. Expired sessions are rejected immediately and cleaned up hourly. Database failures stop startup or fail the request; there is no file fallback.
+PostgreSQL is the only runtime store. Content and visibility settings use JSONB with an atomic revision check; passcodes use a JSONB collection with transactional row locks; Better Auth's tables (`user`, `session`, `account`, `verification`, `jwks` and the `oauth*` tables for MCP clients, consents and tokens) are created and migrated at startup under an advisory lock; the résumé and publication PDFs use `bytea`; browser sessions use expiring database rows. All app processes read the database directly. Expired sessions are rejected immediately and cleaned up hourly. Database failures stop startup or fail the request; there is no file fallback.
 
 ### Initial import and shared content
 
-On the first startup against a new database, the app imports `document.json`, `passcodes.json`, `api-keys.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
+On the first startup against a new database, the app imports `document.json`, `passcodes.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
 
-Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Migration version 3 removes the obsolete per-section `open` flag. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so revoked keys and deleted content cannot return on restart. Do not delete that record.
+Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Migration version 3 removes the obsolete per-section `open` flag. Migration version 4 deletes the former MCP API-key hashes. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so deleted content cannot return on restart. Do not delete that record.
 
-**Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** API keys and viewer passcodes remain valid after import, subject to their existing expiry rules.
+**Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** Viewer passcodes remain valid after import, subject to their existing expiry rules.
 
-For a fresh installation without content files, the app creates an empty document and empty passcode/key lists and imports the repository PDF if available. Log in through OIDC to populate the app. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. Never copy examples over existing production files.
+For a fresh installation without content files, the app creates an empty document and an empty passcode list and imports the repository PDF if available. Log in through OIDC to populate the app. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. Never copy examples over existing production files.
 
 The admin **Content** tab edits one shared list. The sidebar shows visibility and item counts; entry headings expand using the keyboard or pointer. Field visibility sits beside each field label, and bullets use multiline inputs. Choose **Always** or **Full view only** for sections, items, rows, authors, bullets, tags, and individual content fields. New content defaults to Always. Hiding a parent hides its descendants, regardless of their visibility. Language selection remains independent of visibility.
 
-Click **Save** to persist content. Switching tabs retains edits. Saves reject stale revisions from another editor or MCP client. **Reload** fetches the latest content, discarding local edits. Passcodes and API-key changes save immediately.
+Click **Save** to persist content. Switching tabs retains edits. Saves reject stale revisions from another editor or MCP client. **Reload** fetches the latest content, discarding local edits. Passcode changes save immediately.
 
 ### MCP access
 
-Create a named key in admin **API Keys** and copy it when displayed; only its hash is stored. Use the Copy button to copy a newly created key or the connection URL. The page lists named keys with creation dates; revoke keys there for immediate effect. Keys grant read/write access to all document content, but cannot manage passcodes or keys. Viewer passcodes and browser sessions cannot authenticate MCP requests.
+The MCP server is `https://resume.kaufmann.dev/mcp` (Streamable HTTP, stateless POST; GET and DELETE return 405). Add the URL to an MCP client; no API key is needed. The client discovers the authorization server through `/.well-known/oauth-protected-resource/mcp` (RFC 9728) and `/.well-known/oauth-authorization-server/auth` (RFC 8414), registers itself with a Client ID Metadata Document or Dynamic Client Registration, and opens a browser window. There the admin signs in with Pocket ID and approves the app on the consent page (`/oauth/consent`), which names the app, its return host and the requested access. The app is the OAuth 2.1 authorization server: Authorization Code with PKCE S256, 15-minute access tokens bound to the `/mcp` resource, and rotating refresh tokens when the client asks for `offline_access`. Pocket ID tokens, browser sessions and viewer passcodes are never accepted as MCP credentials.
 
-Connect with Streamable HTTP at `https://resume.kaufmann.dev/api/mcp` and the header `Authorization: Bearer YOUR_API_KEY`. Requests are stateless POSTs; GET and DELETE return 405. Available tools:
+Scopes decide which tools a token sees and may call; the same mapping is enforced on every call, including each call in a batch:
+
+- `resume:read`: `list_sections`, `get_section`, `get_document`, `preview_document`
+- `resume:write`: `put_section`, `delete_section`, `put_item`, `delete_item`, `patch_document`, `replace_document`
+
+Missing or invalid tokens get `401` with a `WWW-Authenticate` challenge pointing at the protected-resource metadata; tokens without a tool's scope get `403 insufficient_scope`.
+
+The editor's **MCP** tab shows the MCP URL and copyable setup steps for Claude Code, Codex, Claude (web and desktop) and ChatGPT, followed by **Connected apps**: each app the signed-in admin authorized, its access and authorization date, with **Revoke**. Revoking removes that admin's consent for the app, revokes its refresh tokens and deletes its stored access tokens, so it must be approved again; an access token it already holds stays valid until it expires (at most 15 minutes). Revoking never affects other admins or the client registration.
+
+Available tools:
 
 - `list_sections`: read section summaries (id, type, title, visibility, count) and the revision.
 - `get_section`: read one section by id, optionally filtered for a view (`view: "compact" | "full"`) or rendered as Markdown (`format: "markdown"`, `locale: "en" | "de"`).
@@ -109,30 +126,30 @@ Every section, entry, row, author, bullet, and tag has `visibility: "all" | "ful
 Notes:
 
 - **Viewer passcodes**: New viewer passcodes require an `expires` date. PostgreSQL is checked on every authenticated request, so expiry, edits, and deletion take effect immediately. Failed login attempts are limited to five per 15 minutes for each proxy-derived client IP; valid passcodes bypass the limiter.
-- **Admin access**: The OIDC provider's access policy is the only admin admission control. OIDC admins can manage viewer passcodes in the editor.
-- **Cookies**: Authentication uses an opaque host-only server-side session cookie that is `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS; sessions have a 24-hour sliding idle limit and a seven-day absolute limit. Theme and language preferences remain separate and are shared across `.kaufmann.dev` subdomains.
+- **Admin access**: The OIDC provider's access policy is the only admin admission control. Every user it lets sign in is an admin who can edit content, manage viewer passcodes and connect MCP apps.
+- **Cookies**: Viewer sessions use the opaque host-only `resume_session` cookie; admin sessions use Better Auth's `resume.session_token` cookie. Both are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS, and both have a 24-hour sliding idle limit and a seven-day absolute limit; background session checks do not extend the idle limit. Theme and language preferences remain separate and are shared across `.kaufmann.dev` subdomains.
 
 ## Authentication Setup
 
-Viewer login uses app-owned passcodes from PostgreSQL; admin login uses confidential OIDC Authorization Code with PKCE S256, state, and nonce, and user-initiated admin logout uses provider logout redirection.
+Viewer login uses app-owned passcodes from PostgreSQL. Admin login uses Better Auth with Pocket ID as a confidential OIDC client (Authorization Code with PKCE S256, state, and nonce); admin logout ends the local session and continues to Pocket ID's end-session endpoint. Startup fails if Pocket ID's discovery document cannot be read.
 
-**Public Client: Off** (confidential client credentials are required)
+Configure the Pocket ID client as follows:
 
-**Callback URL:** `OIDC_CALLBACK_URL` (production: `https://resume.kaufmann.dev/auth/callback`)
+- **Public Client:** Off (confidential client credentials are required)
+- **Callback URL:** `${ORIGIN}/auth/callback/pocket-id` (production: `https://resume.kaufmann.dev/auth/callback/pocket-id`)
+- **Logout Callback URL:** `${ORIGIN}/` (production: `https://resume.kaufmann.dev/`)
 
-**Logout Callback URL:** `OIDC_POST_LOGOUT_URL` (production: `https://resume.kaufmann.dev/`)
+MCP clients need no Pocket ID configuration; they register with this app.
 
-Token exchange uses `client_secret_post` for token endpoint authentication (`client_id` and `client_secret` as form parameters).
-
-| Environment variable   | Required | Purpose                                                 |
-| ---------------------- | :------: | ------------------------------------------------------- |
-| `DATABASE_URL`         |   Yes    | PostgreSQL connection string for all persistent state.  |
-| `OIDC_ISSUER_URL`      |   Yes    | Provider issuer URL used for discovery.                 |
-| `OIDC_CLIENT_ID`       |   Yes    | Confidential client identifier.                         |
-| `OIDC_CLIENT_SECRET`   |   Yes    | Confidential client secret used at token exchange.      |
-| `OIDC_CALLBACK_URL`    |   Yes    | Exact callback URL; must end in `/auth/callback`.       |
-| `OIDC_POST_LOGOUT_URL` |   Yes    | Post-logout redirect URL; must be an origin.            |
-| `SESSION_SECRET`       |   Yes    | Session cookie signing secret (at least 32 characters). |
+| Environment variable | Required | Purpose                                                                                                                  |
+| -------------------- | :------: | ------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`       |   Yes    | PostgreSQL connection string for all persistent state.                                                                   |
+| `ORIGIN`             |   Yes    | Canonical public origin; production must be `https://resume.kaufmann.dev`. Sets the MCP URL, OAuth issuer and callbacks. |
+| `OIDC_ISSUER_URL`    |   Yes    | Pocket ID issuer URL used for discovery.                                                                                 |
+| `OIDC_CLIENT_ID`     |   Yes    | Confidential client identifier.                                                                                          |
+| `OIDC_CLIENT_SECRET` |   Yes    | Confidential client secret used at token exchange.                                                                       |
+| `SESSION_SECRET`     |   Yes    | Viewer session cookie signing secret (at least 32 characters).                                                           |
+| `BETTER_AUTH_SECRET` |   Yes    | Better Auth secret for admin sessions and OAuth signing keys (at least 32 random characters).                            |
 
 ## Local Development
 
@@ -162,7 +179,8 @@ The frontend usually runs at `http://localhost:5173`.
 In local development:
 
 - The frontend talks to `http://localhost:3001`.
-- Admin access requires a provider client with localhost callback and post-logout URLs plus the required Authentication Setup variables.
+- Admin access requires `ORIGIN=http://localhost:3001`, a provider client with the callback `http://localhost:3001/auth/callback/pocket-id` and post-logout URL `http://localhost:3001/`, plus the other Authentication Setup variables.
+- The OAuth sign-in and consent page is served by the backend from `dist/`, so run `npm run build` before connecting a local MCP client to `http://localhost:3001/mcp`.
 - Session cookies stay local to your localhost environment.
 - Theme and language preferences still persist through cookies.
 
@@ -171,19 +189,19 @@ In local development:
 - **Build Pack:** Railpack; `railpack.json` starts `node server.js`.
 - **Base Directory:** `/`. This is a server application, not a static site.
 - **Persistent Storage:** PostgreSQL owns persistent state. Keep `/data` attached for the first import, then remove the app volume after verification. The PostgreSQL service needs its own persistent storage and backups.
-- **Required environment:** all production authentication variables in Authentication Setup (`OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_CALLBACK_URL`, `OIDC_POST_LOGOUT_URL`, `SESSION_SECRET`), plus `DATABASE_URL` and `NODE_ENV=production`.
+- **Required environment:** all production authentication variables in Authentication Setup (`ORIGIN`, `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `SESSION_SECRET`, `BETTER_AUTH_SECRET`), plus `DATABASE_URL` and `NODE_ENV=production`.
 - **Optional environment:** `PORT` defaults to `3001`.
 - **Domains:** `https://resume.kaufmann.dev`.
 
 ### Migrating the existing deployment
 
-1. Back up the existing `/data` volume. Confirm it contains the latest document, passcodes, API keys, and uploaded PDF. Keep it mounted at `/data` for the first deployment of this commit; a read-only mount is sufficient. For older deployments with individual mounts or `DATA_DIRECTORY`, keep those sources attached for import.
+1. Back up the existing `/data` volume. Confirm it contains the latest document, passcodes, and uploaded PDF. Keep it mounted at `/data` for the first deployment of this commit; a read-only mount is sufficient. For older deployments with individual mounts or `DATA_DIRECTORY`, keep those sources attached for import.
 2. Provision a dedicated PostgreSQL database and add **`DATABASE_URL`** to the app's runtime environment. Keep the authentication variables. Pause edits and stop the old app before starting the new version so it cannot write to files after the import snapshot.
 3. Redeploy this commit. Startup creates the schema and imports automatically; no pre/post-deployment command is needed. A failed import leaves no partial database state. Check the logs for `PostgreSQL storage ready; migrations complete`.
-4. Log in again and verify the compact and full views, passcodes, existing MCP API keys, and the PDF. Confirm an edit survives a restart.
+4. Log in again and verify the compact and full views, passcodes, and the PDF. Confirm an edit survives a restart.
 5. Remove the app's `/data` mount and any old file/session mounts, `DATA_DIRECTORY`, and `SESSION_STORE_PATH`, then redeploy. Keep the source backup until satisfied with the migration. The app now needs only the database connection for persistence.
 
-Back up PostgreSQL after migration, including every `app_*` table. The old files are a pre-migration snapshot and will not reflect subsequent edits. To roll back to the old application, stop the new app and restore the pre-migration file backup; changes made in PostgreSQL must be exported separately or they will be absent from that rollback. Only share a database between deployments that should share content and credentials.
+Back up PostgreSQL after migration, including every `app_*` table. The old files are a pre-migration snapshot and will not reflect subsequent edits. To roll back to the old application, stop the new app and restore the pre-migration file backup; changes made in PostgreSQL must be exported separately or they will be absent from that rollback. Only share a database between deployments that should share content, admins and connected MCP apps.
 
 ## Production Deployment (Standard VPS)
 
@@ -283,7 +301,7 @@ SERVICE_NAME=your-service-name ./deploy.sh
 Nginx should:
 
 - serve the static files from `dist/`
-- proxy `/api/` and `/auth/` requests, and paths without a static file, to the Node server so unknown paths get its 404 page
+- proxy `/api/`, `/auth/`, `/oauth/`, `/.well-known/` and `/mcp` requests, and paths without a static file, to the Node server so unknown paths get its 404 page
 
 Example shape:
 
@@ -298,7 +316,7 @@ server {
         try_files $uri $uri/ @app;
     }
 
-    location ~ ^/(api|auth)/ {
+    location ~ ^/(api|auth|oauth|\.well-known)/|^/mcp$ {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -351,6 +369,6 @@ Without those forwarded headers, secure cookie behavior and callback URLs can be
 
 - `npm run dev` starts the Vite dev server
 - `npm run build` creates the production frontend build
-- `TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/TEST_DATABASE npm test` runs authentication, migration, visibility, persistence, MCP, and PDF upload tests against PostgreSQL. Use a disposable test database whose role can create schemas; each fixture creates and removes its own schema. Tests never use `DATABASE_URL`.
+- `TEST_DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/TEST_DATABASE npm test` runs authentication, OAuth/MCP authorization, migration, visibility, persistence, MCP tool, and PDF upload tests against PostgreSQL; a local stub stands in for Pocket ID discovery. Use a disposable test database whose role can create schemas; each fixture creates and removes its own schema. Tests never use `DATABASE_URL`.
 - `npm run preview` previews the Vite build locally
 - `npm run server` starts the Express backend

@@ -1,96 +1,52 @@
-import { database } from './helpers/database.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { PostgresSessionStore } from '../storage.js';
 import request from 'supertest';
+import { ABSOLUTE_SESSION_MS, IDLE_SESSION_MS, loadAuthConfig } from '../auth.js';
+import { initAuth } from '../oauth.js';
+import { PASSCODE_RATE_LIMIT_MAX_FAILURES } from '../server.js';
+import { database } from './helpers/database.js';
 import {
-  ABSOLUTE_SESSION_MS,
-  IDLE_SESSION_MS,
-  createOidcService,
-  loadAuthConfig
-} from '../auth.js';
-import {
-  PASSCODE_RATE_LIMIT_MAX_FAILURES,
-  createApp
-} from '../server.js';
+  ORIGIN, authorizeMcpClient, createTestApp, mcpRpc, signInAdmin, writeJson
+} from './helpers/oauth.js';
 
 const TEST_SESSION_SECRET = 'test-session-secret-that-is-longer-than-thirty-two-characters';
+const TEST_AUTH_SECRET = 'test-auth-secret-that-is-longer-than-thirty-two-characters';
 
-function writeJson(directory, fileName, value) {
-  fs.writeFileSync(path.join(directory, fileName), JSON.stringify(value), 'utf8');
+async function createFixture(t) {
+  let currentTime = Date.parse('2026-01-01T00:00:00.000Z');
+  const fixture = await createTestApp(t, {
+    now: () => currentTime,
+    seed(directory) {
+      writeJson(directory, 'passcodes.json', [
+        { code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' },
+        { code: 'expired-code', expires: '2000-01-01T00:00:00.000Z' }
+      ]);
+      writeJson(directory, 'document.json', { sections: [
+        { id: 'compact', title: 'Compact', type: 'entries', items: [] },
+        { id: 'extra', title: 'Extra', type: 'entries', items: [], visibility: 'full' }
+      ] });
+      fs.writeFileSync(path.join(directory, 'resume.pdf'), 'test pdf', 'utf8');
+    }
+  });
+  return Object.defineProperty(fixture, 'now', {
+    get() { return currentTime; },
+    set(value) { currentTime = value; }
+  });
 }
 
-async function createFixture(t, authConfigOverrides = {}) {
-  const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-resume-auth-'));
-  writeJson(dataDirectory, 'passcodes.json', [
-    { code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' },
-    { code: 'expired-code', expires: '2000-01-01T00:00:00.000Z' }
-  ]);
-  writeJson(dataDirectory, 'document.json', { sections: [
-    { id: 'compact', title: 'Compact', type: 'entries', items: [] },
-    { id: 'extra', title: 'Extra', type: 'entries', items: [], visibility: 'full' }
-  ] });
-  fs.writeFileSync(path.join(dataDirectory, 'resume.pdf'), 'test pdf', 'utf8');
-
-  let currentTime = Date.parse('2026-01-01T00:00:00.000Z');
-  const oidcCalls = { exchanged: [], logoutHints: [] };
-  const oidcService = {
-    async createAuthorizationRequest() {
-      return {
-        authorizationUrl: new URL('https://identity.example/authorize?flow=oidc'),
-        codeVerifier: 'pkce-verifier',
-        state: 'state-value',
-        nonce: 'nonce-value'
-      };
-    },
-    async exchangeCallback(callbackUrl, transaction) {
-      oidcCalls.exchanged.push({ callbackUrl, transaction });
-      return { idTokenHint: 'raw-id-token' };
-    },
-    createLogoutUrl(idTokenHint) {
-      oidcCalls.logoutHints.push(idTokenHint);
-      const logoutUrl = new URL('https://identity.example/end-session');
-      logoutUrl.searchParams.set('id_token_hint', idTokenHint);
-      logoutUrl.searchParams.set(
-        'post_logout_redirect_uri',
-        'https://resume.kaufmann.dev/'
-      );
-      return logoutUrl;
+/** Admin checks run on the real clock, which Better Auth uses for its own session expiry. */
+async function createAdminFixture(t) {
+  return createTestApp(t, {
+    seed(directory) {
+      writeJson(directory, 'passcodes.json', [{ code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' }]);
+      writeJson(directory, 'document.json', { sections: [
+        { id: 'compact', title: 'Compact', type: 'entries', items: [] },
+        { id: 'extra', title: 'Extra', type: 'entries', items: [], visibility: 'full' }
+      ] });
     }
-  };
-  const authConfig = {
-    callbackUrl: 'https://resume.kaufmann.dev/auth/callback',
-    postLogoutUrl: 'https://resume.kaufmann.dev/',
-    sessionSecret: TEST_SESSION_SECRET,
-    ...authConfigOverrides
-  };
-  const { storage } = await database(t, dataDirectory);
-  const sessionStore = new PostgresSessionStore(storage.pool);
-  t.after(() => sessionStore.close());
-  const app = createApp({
-    authConfig,
-    oidcService,
-    sessionStore,
-    storage,
-    staticDirectory: dataDirectory,
-    now: () => currentTime
   });
-
-  return {
-    app,
-    storage,
-    dataDirectory,
-    oidcCalls,
-    get now() {
-      return currentTime;
-    },
-    set now(value) {
-      currentTime = value;
-    }
-  };
 }
 
 function sessionCookie(response) {
@@ -99,36 +55,8 @@ function sessionCookie(response) {
   ));
 }
 
-function createOidcClientStub() {
-  const discoveryCalls = [];
-  const allowInsecureRequests = () => {};
-  const client = {
-    allowInsecureRequests,
-    ClientSecretPost(clientSecret) {
-      return { method: 'post', clientSecret };
-    },
-    ClientSecretBasic(clientSecret) {
-      return { method: 'basic', clientSecret };
-    },
-    async discovery(...args) {
-      discoveryCalls.push(args);
-      return {
-        serverMetadata() {
-          return {
-            end_session_endpoint: 'https://identity.example/end-session',
-            code_challenge_methods_supported: ['S256']
-          };
-        }
-      };
-    }
-  };
-
-  return { client, discoveryCalls };
-}
-
 test('viewer sessions use opaque cookies and enforce expiry and immediate revocation', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
   const viewer = request.agent(fixture.app);
 
   const expiredLogin = await viewer
@@ -159,7 +87,6 @@ test('viewer sessions use opaque cookies and enforce expiry and immediate revoca
 
 test('failed passcode attempts are proxy-safe rate limited without blocking valid codes', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
   const clientAddress = '198.51.100.20';
 
   for (let attempt = 0; attempt < PASSCODE_RATE_LIMIT_MAX_FAILURES; attempt += 1) {
@@ -192,77 +119,8 @@ test('failed passcode attempts are proxy-safe rate limited without blocking vali
     .expect(401);
 });
 
-test('OIDC callback regenerates an admin session and RP logout destroys it', async (t) => {
-  const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
-  const admin = request.agent(fixture.app);
-
-  const login = await admin
-    .get('/auth/login')
-    .query({ returnTo: 'https://resume.kaufmann.dev/' });
-  assert.equal(login.status, 303);
-  assert.equal(login.headers.location, 'https://identity.example/authorize?flow=oidc');
-  const transactionCookie = sessionCookie(login);
-
-  const callback = await admin.get('/auth/callback?code=code-value&state=state-value');
-  assert.equal(callback.status, 303);
-  assert.equal(callback.headers.location, 'https://resume.kaufmann.dev/');
-  const adminCookie = sessionCookie(callback);
-  assert.notEqual(adminCookie.split(';')[0], transactionCookie.split(';')[0]);
-  assert.doesNotMatch(adminCookie, /raw-id-token/);
-  assert.equal(fixture.oidcCalls.exchanged.length, 1);
-  assert.equal(
-    fixture.oidcCalls.exchanged[0].callbackUrl.toString(),
-    'https://resume.kaufmann.dev/auth/callback?code=code-value&state=state-value'
-  );
-  assert.deepEqual(
-    {
-      codeVerifier: fixture.oidcCalls.exchanged[0].transaction.codeVerifier,
-      state: fixture.oidcCalls.exchanged[0].transaction.state,
-      nonce: fixture.oidcCalls.exchanged[0].transaction.nonce
-    },
-    { codeVerifier: 'pkce-verifier', state: 'state-value', nonce: 'nonce-value' }
-  );
-
-  const restored = await admin.get('/api/session');
-  assert.equal(restored.status, 200);
-  assert.equal(restored.body.isAdmin, true);
-  assert.deepEqual(restored.body.passcodesData, [
-    { code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' },
-    { code: 'expired-code', expires: '2000-01-01T00:00:00.000Z' }
-  ]);
-
-  const listedPasscodes = await admin.get('/api/passcodes');
-  assert.equal(listedPasscodes.status, 200);
-  const createdPasscode = await admin
-    .post('/api/passcodes')
-    .send({ code: 'managed-code', expires: '2099-01-01T00:00:00.000Z' });
-  assert.equal(createdPasscode.status, 200);
-  const updatedPasscode = await admin
-    .put('/api/passcodes/2')
-    .send({ code: 'managed-code-updated', expires: '2099-02-01T00:00:00.000Z' });
-  assert.equal(updatedPasscode.status, 200);
-  const deletedPasscode = await admin.delete('/api/passcodes/2');
-  assert.equal(deletedPasscode.status, 200);
-
-  const logout = await admin.post('/auth/logout');
-  assert.equal(logout.status, 303);
-  const logoutUrl = new URL(logout.headers.location);
-  assert.equal(logoutUrl.origin, 'https://identity.example');
-  assert.equal(logoutUrl.searchParams.get('id_token_hint'), 'raw-id-token');
-  assert.equal(
-    logoutUrl.searchParams.get('post_logout_redirect_uri'),
-    'https://resume.kaufmann.dev/'
-  );
-  assert.deepEqual(fixture.oidcCalls.logoutHints, ['raw-id-token']);
-
-  const afterLogout = await admin.get('/api/session');
-  assert.equal(afterLogout.status, 401);
-});
-
 test('passive restore does not extend idle time, while user actions do', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
   const viewer = request.agent(fixture.app);
   const createdAt = fixture.now;
 
@@ -284,7 +142,6 @@ test('passive restore does not extend idle time, while user actions do', async (
 
 test('absolute lifetime ends active sessions at seven days', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
   const viewer = request.agent(fixture.app);
   const createdAt = fixture.now;
 
@@ -299,22 +156,8 @@ test('absolute lifetime ends active sessions at seven days', async (t) => {
   await viewer.get('/api/session').expect(401);
 });
 
-test('a leftover cookie from the former shared-domain session does not shadow a new login', async (t) => {
-  const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
-
-  const login = await request(fixture.app).get('/auth/login');
-  const transactionCookie = sessionCookie(login).split(';')[0];
-  // Browsers send the older .kaufmann.dev cookie first, and the cookie parser keeps the first value of a name.
-  const callback = await request(fixture.app)
-    .get('/auth/callback?code=code-value&state=state-value')
-    .set('Cookie', `cv_resume_session=s%3Aformer-session.signature; ${transactionCookie}`);
-  assert.equal(callback.status, 303);
-});
-
 test('viewer logout is local and does not call the provider', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
   const viewer = request.agent(fixture.app);
 
   await viewer.post('/api/auth/passcode').send({ passcode: 'viewer-code' }).expect(200);
@@ -324,13 +167,11 @@ test('viewer logout is local and does not call the provider', async (t) => {
 
   assert.equal(logout.status, 303);
   assert.equal(logout.headers.location, 'https://resume.kaufmann.dev/');
-  assert.deepEqual(fixture.oidcCalls.logoutHints, []);
   await viewer.get('/api/session').expect(401);
 });
 
 test('HTTPS production requests set a secure host-only cookie', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
 
   const login = await request(fixture.app)
     .post('/api/auth/passcode')
@@ -346,127 +187,8 @@ test('HTTPS production requests set a secure host-only cookie', async (t) => {
   assert.match(cookie, /SameSite=Lax/);
 });
 
-test('production auth configuration requires the registered URLs', () => {
-  const environment = {
-    NODE_ENV: 'production',
-    OIDC_ISSUER_URL: 'https://identity.example/',
-    OIDC_CLIENT_ID: 'client-id',
-    OIDC_CLIENT_SECRET: 'client-secret',
-    OIDC_CALLBACK_URL: 'https://resume.kaufmann.dev/auth/callback',
-    OIDC_POST_LOGOUT_URL: 'https://resume.kaufmann.dev/',
-    SESSION_SECRET: TEST_SESSION_SECRET
-  };
-
-  assert.equal(loadAuthConfig(environment).callbackUrl, 'https://resume.kaufmann.dev/auth/callback');
-  assert.throws(
-    () => loadAuthConfig({ ...environment, OIDC_CALLBACK_URL: 'https://other.kaufmann.dev/auth/callback' }),
-    /registered production callback URL/
-  );
-});
-
-test('auth configuration accepts HTTP only for strict loopback URLs', () => {
-  const environment = {
-    NODE_ENV: 'development',
-    OIDC_ISSUER_URL: 'https://identity.example/realms/admin',
-    OIDC_CLIENT_ID: 'client-id',
-    OIDC_CLIENT_SECRET: 'client-secret',
-    OIDC_CALLBACK_URL: 'https://app.example/auth/callback',
-    OIDC_POST_LOGOUT_URL: 'https://app.example/',
-    SESSION_SECRET: TEST_SESSION_SECRET
-  };
-
-  const loopbackConfig = loadAuthConfig({
-    ...environment,
-    OIDC_ISSUER_URL: 'http://127.0.0.2:8080/realms/admin',
-    OIDC_CALLBACK_URL: 'http://localhost:3001/auth/callback',
-    OIDC_POST_LOGOUT_URL: 'http://[::1]:5173/'
-  });
-
-  assert.equal(loopbackConfig.issuerUrl, 'http://127.0.0.2:8080/realms/admin');
-  assert.equal(loopbackConfig.callbackUrl, 'http://localhost:3001/auth/callback');
-  assert.equal(loopbackConfig.postLogoutUrl, 'http://[::1]:5173/');
-
-  for (const [name, value] of [
-    ['OIDC_ISSUER_URL', 'http://identity.example/'],
-    ['OIDC_CALLBACK_URL', 'http://app.example/auth/callback'],
-    ['OIDC_POST_LOGOUT_URL', 'http://app.example/']
-  ]) {
-    assert.throws(
-      () => loadAuthConfig({ ...environment, [name]: value }),
-      new RegExp(`${name} must use HTTPS unless it targets a loopback host`)
-    );
-  }
-});
-
-test('auth configuration rejects ambiguous or overbroad OIDC URLs', () => {
-  const environment = {
-    OIDC_ISSUER_URL: 'https://identity.example/realms/admin',
-    OIDC_CLIENT_ID: 'client-id',
-    OIDC_CLIENT_SECRET: 'client-secret',
-    OIDC_CALLBACK_URL: 'https://app.example/auth/callback',
-    OIDC_POST_LOGOUT_URL: 'https://app.example/',
-    SESSION_SECRET: TEST_SESSION_SECRET
-  };
-  const invalidValues = [
-    ['OIDC_ISSUER_URL', 'https://user:secret@identity.example/', /must not include credentials/],
-    ['OIDC_ISSUER_URL', 'https://@identity.example/', /must not include credentials/],
-    ['OIDC_ISSUER_URL', 'https://identity.example/realms/admin?', /query or fragment/],
-    ['OIDC_CALLBACK_URL', 'https://app.example/auth/callback#', /query or fragment/],
-    ['OIDC_ISSUER_URL', 'https://identity.example\\@malicious.example/', /backslashes/],
-    ['OIDC_CALLBACK_URL', 'https://app.example/not-the-callback', /\/auth\/callback path/],
-    ['OIDC_POST_LOGOUT_URL', 'https://app.example/signed-out', /origin-only/]
-  ];
-
-  for (const [name, value, expectedError] of invalidValues) {
-    assert.throws(
-      () => loadAuthConfig({ ...environment, [name]: value }),
-      expectedError
-    );
-  }
-});
-
-test('OIDC discovery permits insecure requests only for validated loopback issuers', async () => {
-  const secureStub = createOidcClientStub();
-  await createOidcService({
-    issuerUrl: 'https://identity.example/realms/admin',
-    clientId: 'client-id',
-    clientSecret: 'client-secret'
-  }, secureStub.client);
-  assert.deepEqual(
-    secureStub.discoveryCalls[0][3],
-    { method: 'post', clientSecret: 'client-secret' }
-  );
-
-  const loopbackStub = createOidcClientStub();
-  await createOidcService({
-    issuerUrl: 'http://localhost:8080/realms/admin',
-    clientId: 'client-id',
-    clientSecret: 'client-secret'
-  }, loopbackStub.client);
-  assert.deepEqual(
-    loopbackStub.discoveryCalls[0][3],
-    { method: 'post', clientSecret: 'client-secret' }
-  );
-  assert.deepEqual(
-    loopbackStub.discoveryCalls[0][4],
-    { execute: [loopbackStub.client.allowInsecureRequests] }
-  );
-
-  const remoteHttpStub = createOidcClientStub();
-  await assert.rejects(
-    createOidcService({
-      issuerUrl: 'http://identity.example/realms/admin',
-      clientId: 'client-id',
-      clientSecret: 'client-secret'
-    }, remoteHttpStub.client),
-    /must use HTTPS unless it targets a loopback host/
-  );
-  assert.equal(remoteHttpStub.discoveryCalls.length, 0);
-});
-
 test('browser requests are limited to the production site and local development', async (t) => {
   const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
 
   for (const origin of ['https://malicious.example', 'https://cv.kaufmann.dev']) {
     await request(fixture.app)
@@ -491,46 +213,163 @@ test('browser requests are limited to the production site and local development'
     .expect('Access-Control-Allow-Origin', 'http://localhost:5173');
 });
 
+test('admin sign-in starts Pocket ID with PKCE and the Better Auth callback', async (t) => {
+  const { app, authConfig } = await createAdminFixture(t);
+  const login = await request(app).get('/auth/login').query({ returnTo: 'http://localhost:5173/?view=full' });
+  assert.equal(login.status, 303);
+  const authorization = new URL(login.headers.location);
+  assert.equal(`${authorization.origin}${authorization.pathname}`, `${authConfig.issuerUrl}/authorize`);
+  assert.equal(authorization.searchParams.get('client_id'), 'resume-test');
+  assert.equal(authorization.searchParams.get('redirect_uri'), `${ORIGIN}/auth/callback/pocket-id`);
+  assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
+  assert.ok(authorization.searchParams.get('state'));
+  assert.match(authorization.searchParams.get('scope'), /openid/);
+});
+
+test('admins manage passcodes and logout continues to the provider', async (t) => {
+  const { app, auth, authConfig } = await createAdminFixture(t);
+  const admin = await signInAdmin(auth);
+  const { internalAdapter } = await auth.$context;
+  await internalAdapter.createAccount({ userId: admin.user.id, providerId: 'pocket-id', accountId: 'pocket-subject', idToken: 'raw-id-token' });
+  const as = call => call.set('Cookie', admin.cookie);
+
+  const restored = await as(request(app).get('/api/session')).expect(200);
+  assert.equal(restored.body.isAdmin, true);
+  assert.deepEqual(restored.body.passcodesData, [{ code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' }]);
+  await as(request(app).post('/api/passcodes')).send({ code: 'managed-code', expires: '2099-01-01T00:00:00.000Z' }).expect(200);
+  await as(request(app).put('/api/passcodes/1')).send({ code: 'managed-code-updated', expires: '2099-02-01T00:00:00.000Z' }).expect(200);
+  await as(request(app).delete('/api/passcodes/1')).expect(200);
+
+  const logout = await as(request(app).post('/auth/logout'));
+  assert.equal(logout.status, 303);
+  const logoutUrl = new URL(logout.headers.location);
+  assert.equal(`${logoutUrl.origin}${logoutUrl.pathname}`, `${authConfig.issuerUrl}/api/oidc/end-session`);
+  assert.equal(logoutUrl.searchParams.get('id_token_hint'), 'raw-id-token');
+  assert.equal(logoutUrl.searchParams.get('post_logout_redirect_uri'), `${ORIGIN}/`);
+  await as(request(app).get('/api/session')).expect(401);
+});
+
+test('background checks do not extend the admin idle limit, user actions do', async (t) => {
+  const { app, auth, storage } = await createAdminFixture(t);
+  const admin = await signInAdmin(auth);
+  const soon = new Date(Date.now() + 60 * 1000);
+  const setExpiry = () => storage.pool.query('UPDATE session SET "expiresAt" = $1 WHERE id = $2', [soon, admin.session.id]);
+  const expiry = async () => (await storage.pool.query('SELECT "expiresAt" FROM session WHERE id = $1', [admin.session.id])).rows[0].expiresAt.getTime();
+
+  await setExpiry();
+  await request(app).get('/api/session').set('Cookie', admin.cookie).expect(200);
+  assert.equal(await expiry(), soon.getTime());
+
+  await request(app).get('/api/data').set('Cookie', admin.cookie).expect(200);
+  assert.ok(await expiry() > Date.now() + IDLE_SESSION_MS - 60 * 1000);
+});
+
+test('admin sessions end seven days after sign-in even while active', async (t) => {
+  const { app, auth, storage } = await createAdminFixture(t);
+  const admin = await signInAdmin(auth);
+  await storage.pool.query('UPDATE session SET "createdAt" = $1 WHERE id = $2', [new Date(Date.now() - ABSOLUTE_SESSION_MS), admin.session.id]);
+  const expired = await request(app).get('/api/data').set('Cookie', admin.cookie);
+  assert.equal(expired.status, 401);
+  assert.equal(expired.body.error, 'Session has expired');
+  assert.equal((await storage.pool.query('SELECT 1 FROM session WHERE id = $1', [admin.session.id])).rowCount, 0);
+});
+
+test('startup fails when Pocket ID discovery is unreachable', async (t) => {
+  const { storage } = await database(t, fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'cv-resume-')));
+  await assert.rejects(initAuth({
+    production: false, origin: ORIGIN, issuerUrl: 'http://127.0.0.1:9', clientId: 'id', clientSecret: 'secret',
+    sessionSecret: TEST_SESSION_SECRET, authSecret: TEST_AUTH_SECRET
+  }, storage.pool), /Pocket ID discovery failed/);
+});
+
+const baseEnvironment = {
+  ORIGIN: 'https://resume.kaufmann.dev',
+  OIDC_ISSUER_URL: 'https://identity.example/',
+  OIDC_CLIENT_ID: 'client-id',
+  OIDC_CLIENT_SECRET: 'client-secret',
+  SESSION_SECRET: TEST_SESSION_SECRET,
+  BETTER_AUTH_SECRET: TEST_AUTH_SECRET
+};
+
+test('production auth configuration requires the canonical origin and strong secrets', () => {
+  const environment = { ...baseEnvironment, NODE_ENV: 'production' };
+  const config = loadAuthConfig(environment);
+  assert.equal(config.origin, 'https://resume.kaufmann.dev');
+  assert.equal(config.production, true);
+  assert.throws(() => loadAuthConfig({ ...environment, ORIGIN: 'https://other.kaufmann.dev' }), /ORIGIN must be https:\/\/resume.kaufmann.dev/);
+  assert.throws(() => loadAuthConfig({ ...environment, BETTER_AUTH_SECRET: 'short' }), /BETTER_AUTH_SECRET must be at least 32 characters/);
+  assert.throws(() => loadAuthConfig({ ...environment, SESSION_SECRET: 'short' }), /SESSION_SECRET must be at least 32 characters/);
+  const { BETTER_AUTH_SECRET, ...missing } = environment;
+  assert.throws(() => loadAuthConfig(missing), /Missing required environment variable: BETTER_AUTH_SECRET/);
+});
+
+test('auth configuration accepts HTTP only for strict loopback URLs', () => {
+  const loopback = loadAuthConfig({ ...baseEnvironment, ORIGIN: 'http://localhost:3001', OIDC_ISSUER_URL: 'http://127.0.0.2:8080/realms/admin' });
+  assert.equal(loopback.origin, 'http://localhost:3001');
+  assert.equal(loopback.issuerUrl, 'http://127.0.0.2:8080/realms/admin');
+  for (const [name, value] of [['OIDC_ISSUER_URL', 'http://identity.example/'], ['ORIGIN', 'http://app.example']]) {
+    assert.throws(() => loadAuthConfig({ ...baseEnvironment, [name]: value }), new RegExp(`${name} must use HTTPS unless it targets a loopback host`));
+  }
+});
+
+test('auth configuration rejects ambiguous or overbroad URLs', () => {
+  for (const [name, value, expectedError] of [
+    ['OIDC_ISSUER_URL', 'https://user:secret@identity.example/', /must not include credentials/],
+    ['OIDC_ISSUER_URL', 'https://@identity.example/', /must not include credentials/],
+    ['OIDC_ISSUER_URL', 'https://identity.example/realms/admin?', /query or fragment/],
+    ['ORIGIN', 'https://resume.kaufmann.dev/#', /query or fragment/],
+    ['OIDC_ISSUER_URL', 'https://identity.example\\@malicious.example/', /backslashes/],
+    ['ORIGIN', 'https://resume.kaufmann.dev/app', /origin-only/]
+  ]) {
+    assert.throws(() => loadAuthConfig({ ...baseEnvironment, [name]: value }), expectedError);
+  }
+});
+
+test('OAuth endpoints accept any origin without credentials; other routes keep the allowlist', async (t) => {
+  const { app } = await createAdminFixture(t);
+  const registered = await request(app).post('/auth/oauth2/register').set('Origin', 'https://assistant.example')
+    .send({ client_name: 'Web Client', redirect_uris: ['https://assistant.example/callback'], token_endpoint_auth_method: 'none' });
+  assert.ok([200, 201].includes(registered.status), `${registered.status} ${registered.text}`);
+  assert.equal(registered.headers['access-control-allow-origin'], '*');
+  assert.equal(registered.headers['access-control-allow-credentials'], undefined);
+  const discovery = await request(app).get('/.well-known/oauth-protected-resource/mcp').set('Origin', 'https://assistant.example').expect(200);
+  assert.equal(discovery.headers['access-control-allow-origin'], '*');
+  const challenge = await request(app).post('/mcp').set('Origin', 'https://assistant.example').send({});
+  assert.equal(challenge.status, 401);
+  assert.match(challenge.headers['access-control-expose-headers'], /WWW-Authenticate/);
+  await request(app).post('/auth/oauth2/consent').set('Origin', 'https://assistant.example').send({ accept: true }).expect(403);
+  await request(app).post('/auth/sign-in/social').set('Origin', 'https://assistant.example').send({ provider: 'pocket-id' }).expect(403);
+});
+
 test('shared editor data and MCP writes require the correct credentials and revision', async t => {
-  const fixture = await createFixture(t);
-  t.after(() => fs.rmSync(fixture.dataDirectory, { recursive: true, force: true }));
-  const admin = request.agent(fixture.app);
+  const fixture = await createAdminFixture(t);
   const viewer = request.agent(fixture.app);
   await viewer.post('/api/auth/passcode').send({ passcode: 'viewer-code' }).expect(200);
   await viewer.get('/api/data').expect(403);
-  await viewer.get('/api/keys').expect(403);
-  await viewer.post('/api/keys').send({ name: 'Denied' }).expect(403);
+  await viewer.get('/api/mcp').expect(403);
   await viewer.post('/api/save').send({}).expect(403);
-  await request(fixture.app).post('/api/mcp').send({}).expect(401);
-  await admin.get('/auth/login').expect(303);
-  await admin.get('/auth/callback?code=test&state=state-value').expect(303);
-  const created = await admin.post('/api/keys').send({ name: 'Test MCP' }).expect(201);
-  const { key, keys } = created.body;
-  assert.equal(keys[0].hash, undefined);
-  assert.ok(!JSON.stringify(await fixture.storage.readCollection('keys')).includes(key));
-  const listed = await admin.get('/api/keys').expect(200);
-  assert.equal(listed.body.key, undefined);
-  const rpc = (method, params = {}) => request(fixture.app).post('/api/mcp')
-    .set('Authorization', `Bearer ${key}`).set('Accept', 'application/json, text/event-stream')
-    .send({ jsonrpc: '2.0', id: 1, method, params });
-  const initialized = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } }).expect(200);
-  assert.equal(initialized.body.result.serverInfo.name, 'cv-resume');
-  const tools = await rpc('tools/list').expect(200);
-  assert.equal(tools.body.result.tools.length, 10);
-  const read = await rpc('tools/call', { name: 'get_document', arguments: {} }).expect(200);
-  const document = JSON.parse(read.body.result.content[0].text);
-  const updated = await rpc('tools/call', { name: 'replace_document', arguments: { data: { sections: [] }, revision: document.revision } }).expect(200);
-  assert.ok(!updated.body.result.isError);
-  await admin.post('/api/save').send(document).expect(409);
-  const current = await admin.get('/api/data').expect(200);
+  const admin = await signInAdmin(fixture.auth);
+  const as = call => call.set('Cookie', admin.cookie);
+  const tokens = await authorizeMcpClient(fixture.app, admin.cookie);
+  const rpc = mcpRpc(fixture.app, tokens.access_token);
+  const initialized = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  assert.equal(initialized.rpc.result.serverInfo.name, 'cv-resume');
+  assert.equal((await rpc('tools/list')).rpc.result.tools.length, 10);
+  const read = await rpc('tools/call', { name: 'get_document', arguments: {} });
+  const document = JSON.parse(read.rpc.result.content[0].text);
+  const updated = await rpc('tools/call', { name: 'replace_document', arguments: { data: { sections: [] }, revision: document.revision } });
+  assert.ok(!updated.rpc.result.isError);
+  await as(request(fixture.app).post('/api/save')).send(document).expect(409);
+  const current = await as(request(fixture.app).get('/api/data')).expect(200);
   assert.deepEqual(current.body.data, { sections: [] });
-  await admin.post('/api/save').send({ data: document.data, revision: current.body.revision }).expect(200);
-  const preview = await rpc('tools/call', { name: 'preview_document', arguments: { view: 'compact' } }).expect(200);
-  assert.deepEqual(JSON.parse(preview.body.result.content[0].text).sections.map(s => s.id), ['compact']);
+  await as(request(fixture.app).post('/api/save')).send({ data: document.data, revision: current.body.revision }).expect(200);
+  const preview = await rpc('tools/call', { name: 'preview_document', arguments: { view: 'compact' } });
+  assert.deepEqual(JSON.parse(preview.rpc.result.content[0].text).sections.map(s => s.id), ['compact']);
   const viewerData = await viewer.get('/api/session').expect(200);
   assert.equal(viewerData.body.document, undefined);
   assert.deepEqual(viewerData.body.data.sections.map(s => [s.id, s.visibility]), [['compact', 'all'], ['extra', 'full']]);
-  await admin.post('/api/save').send({ data: { sections: 'wrong' }, revision: document.revision }).expect(400);
-  await admin.delete(`/api/keys/${keys[0].id}`).expect(200);
-  await rpc('tools/list').expect(401);
+  await as(request(fixture.app).post('/api/save')).send({ data: { sections: 'wrong' }, revision: document.revision }).expect(400);
+  await as(request(fixture.app).delete(`/api/mcp/apps/${tokens.clientId}`)).set('Origin', ORIGIN).expect(200);
+  const refreshed = await request(fixture.app).post('/auth/oauth2/token').type('form').send({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: tokens.clientId });
+  assert.equal(refreshed.status, 400);
 });

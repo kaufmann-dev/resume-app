@@ -152,6 +152,68 @@ body {
   min-height: 20px;
 }
 
+/* ── OAUTH SIGN-IN AND CONSENT ── */
+.oauth-card {
+  text-align: left;
+}
+
+.oauth-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.oauth-text {
+  color: var(--t2);
+  margin-bottom: 16px;
+}
+
+.oauth-meta,
+.oauth-status {
+  color: var(--t3);
+  font-size: 0.8rem;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.oauth-scopes {
+  margin: 0 0 20px 20px;
+}
+
+.oauth-scopes li + li {
+  margin-top: 4px;
+}
+
+.oauth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.oauth-error {
+  color: #ff4d4d;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.oauth-error:empty {
+  display: none;
+}
+
+.oauth-card > button {
+  margin-bottom: 16px;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
 /* ── CV UI ── */
 #cv-container {
   display: none;

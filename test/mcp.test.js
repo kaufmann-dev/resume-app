@@ -1,79 +1,52 @@
-import { database } from './helpers/database.js';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import test from 'node:test';
-import { PostgresSessionStore } from '../storage.js';
 import request from 'supertest';
-import { createApp } from '../server.js';
 import { applyJsonPatch } from '../document-patch.js';
+import {
+  MCP_URL, ORIGIN, authorizeMcpClient, createTestApp, decideConsent, mcpRpc, refresh, registerClient, signInAdmin, startAuthorization, writeJson
+} from './helpers/oauth.js';
 
-const TEST_SESSION_SECRET = 'test-session-secret-that-is-longer-than-thirty-two-characters';
+const ALL_TOOLS = [
+  'delete_item', 'delete_section', 'get_document', 'get_section', 'list_sections',
+  'patch_document', 'preview_document', 'put_item', 'put_section', 'replace_document'
+];
 
-function writeJson(directory, fileName, value) {
-  fs.writeFileSync(path.join(directory, fileName), JSON.stringify(value), 'utf8');
-}
+const seedDocument = directory => writeJson(directory, 'document.json', { sections: [
+  { id: 'experience', title: 'Experience', type: 'entries', visibility: 'full', items: [{ heading: 'Job A', highlights: [{ text: 'Did things' }], tags: [{ text: 'JS' }] }] },
+  { id: 'personal', title: 'Personal', type: 'info', rows: [{ label: 'Location', value: 'Berlin' }] },
+  { id: 'pubs', title: 'Publications', type: 'pub', items: [{ title: 'Paper', year: 2026, authors: [{ name: 'A. Uthor' }] }] }
+] });
 
-async function createMcpFixture(t) {
-  const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-resume-mcp-'));
-  t.after(() => fs.rmSync(dataDirectory, { recursive: true, force: true }));
-  writeJson(dataDirectory, 'passcodes.json', []);
-  writeJson(dataDirectory, 'document.json', { sections: [
-    { id: 'experience', title: 'Experience', type: 'entries', visibility: 'full', items: [{ heading: 'Job A', highlights: [{ text: 'Did things' }], tags: [{ text: 'JS' }] }] },
-    { id: 'personal', title: 'Personal', type: 'info', rows: [{ label: 'Location', value: 'Berlin' }] },
-    { id: 'pubs', title: 'Publications', type: 'pub', items: [{ title: 'Paper', year: 2026, authors: [{ name: 'A. Uthor' }] }] }
-  ] });
-  const { storage } = await database(t, dataDirectory);
-  const sessionStore = new PostgresSessionStore(storage.pool);
-  t.after(() => sessionStore.close());
-  const app = createApp({
-    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET },
-    oidcService: {
-      async createAuthorizationRequest() {
-        return { authorizationUrl: new URL('https://identity.example/authorize'), codeVerifier: 'v', state: 's', nonce: 'n' };
-      },
-      async exchangeCallback() { return { idTokenHint: 'hint' }; },
-      createLogoutUrl() { return new URL('https://identity.example/end-session'); }
-    },
-    sessionStore,
-    storage,
-    staticDirectory: dataDirectory,
-    now: () => Date.now()
-  });
-  const admin = request.agent(app);
-  await admin.get('/auth/login').expect(303);
-  await admin.get('/auth/callback?code=test&state=s').expect(303);
-  const created = await admin.post('/api/keys').send({ name: 'mcp-test' }).expect(201);
-  const rpc = (method, params = {}) => request(app).post('/api/mcp')
-    .set('Authorization', `Bearer ${created.body.key}`).set('Accept', 'application/json, text/event-stream')
-    .send({ jsonrpc: '2.0', id: 1, method, params });
-  await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } }).expect(200);
+async function createMcpFixture(t, { scope } = {}) {
+  const fixture = await createTestApp(t, { seed: seedDocument });
+  const admin = await signInAdmin(fixture.auth);
+  const tokens = await authorizeMcpClient(fixture.app, admin.cookie, scope ? { scope } : {});
+  const rpc = mcpRpc(fixture.app, tokens.access_token);
+  const initialized = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  assert.equal(initialized.status, 200);
   const call = async (name, args) => {
-    const response = await rpc('tools/call', { name, arguments: args }).expect(200);
-    if (response.body.error) return { protocolError: response.body.error.message };
-    const text = response.body.result.content[0].text;
+    const response = await rpc('tools/call', { name, arguments: args });
+    assert.equal(response.status, 200);
+    if (response.rpc.error) return { protocolError: response.rpc.error.message };
+    const text = response.rpc.result.content[0].text;
     let body;
     try { body = JSON.parse(text); } catch { body = undefined; }
-    return { isError: !!response.body.result.isError, body, text, structuredContent: response.body.result.structuredContent };
+    return { isError: !!response.rpc.result.isError, body, text, structuredContent: response.rpc.result.structuredContent };
   };
-  return { app, storage, dataDirectory, rpc, call };
+  return { ...fixture, admin, tokens, rpc, call };
 }
 
 test('tools/list exposes the granular editing tools', async t => {
   const { rpc } = await createMcpFixture(t);
-  const tools = await rpc('tools/list').expect(200);
-  assert.deepEqual(tools.body.result.tools.map(tool => tool.name).sort(), [
-    'delete_item', 'delete_section', 'get_document', 'get_section', 'list_sections',
-    'patch_document', 'preview_document', 'put_item', 'put_section', 'replace_document'
-  ]);
+  const tools = await rpc('tools/list');
+  assert.deepEqual(tools.rpc.result.tools.map(tool => tool.name).sort(), ALL_TOOLS);
 });
 
 test('tools/list advertises output schemas and read-only hints', async t => {
   const { rpc } = await createMcpFixture(t);
-  const tools = await rpc('tools/list').expect(200);
-  const byName = Object.fromEntries(tools.body.result.tools.map(tool => [tool.name, tool]));
-  for (const name of ['delete_item', 'delete_section', 'get_document', 'get_section', 'list_sections', 'patch_document', 'preview_document', 'put_item', 'put_section', 'replace_document']) {
+  const tools = await rpc('tools/list');
+  const byName = Object.fromEntries(tools.rpc.result.tools.map(tool => [tool.name, tool]));
+  for (const name of ALL_TOOLS) {
     assert.ok(byName[name].outputSchema, `${name} advertises an output schema`);
   }
   assert.equal(byName.get_document.annotations.readOnlyHint, true);
@@ -328,4 +301,149 @@ test('applyJsonPatch implements move, copy and pointer escapes', () => {
   assert.throws(() => applyJsonPatch(document, [{ op: 'remove', path: 'sections/0' }]), /must start with "\/"/);
   assert.throws(() => applyJsonPatch(document, [{ op: 'remove', path: '/sections/0/items/01' }]), /not a valid array index/);
   assert.throws(() => applyJsonPatch(document, [{ op: 'remove', path: '/sections/0/items/-' }]), /only valid for "add"/);
+});
+
+test('unauthenticated requests get a challenge pointing at the protected resource metadata', async t => {
+  const { app, admin } = await createMcpFixture(t);
+  for (const response of [
+    await mcpRpc(app)('tools/list'),
+    await mcpRpc(app, 'not-a-token')('tools/list'),
+    // A browser session cookie is not an MCP credential.
+    await request(app).post('/mcp').set('Cookie', admin.cookie).set('Accept', 'application/json, text/event-stream').send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+  ]) {
+    assert.equal(response.status, 401);
+    assert.match(response.headers['www-authenticate'], new RegExp(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`));
+    assert.match(response.headers['www-authenticate'], /scope="resume:read resume:write offline_access"/);
+  }
+});
+
+test('the endpoint accepts POST only', async t => {
+  const { app, tokens } = await createMcpFixture(t);
+  for (const method of ['get', 'delete']) {
+    const response = await request(app)[method]('/mcp').set('Authorization', `Bearer ${tokens.access_token}`);
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.allow, 'POST');
+  }
+});
+
+test('discovery documents describe the resource, scopes and registration', async t => {
+  const { app } = await createTestApp(t);
+  const resource = await request(app).get('/.well-known/oauth-protected-resource/mcp').expect(200);
+  assert.equal(resource.body.resource, MCP_URL);
+  assert.deepEqual(resource.body.authorization_servers, [`${ORIGIN}/auth`]);
+  const server = await request(app).get('/.well-known/oauth-authorization-server/auth').expect(200);
+  assert.equal(server.body.issuer, `${ORIGIN}/auth`);
+  assert.ok(server.body.registration_endpoint);
+  assert.equal(server.body.client_id_metadata_document_supported, true);
+  assert.deepEqual(server.body.code_challenge_methods_supported, ['S256']);
+  for (const scope of ['offline_access', 'resume:read', 'resume:write']) assert.ok(server.body.scopes_supported.includes(scope), scope);
+});
+
+test('read-only tokens see and call only the read tools', async t => {
+  const { rpc, call } = await createMcpFixture(t, { scope: 'openid offline_access resume:read' });
+  const tools = await rpc('tools/list');
+  assert.deepEqual(tools.rpc.result.tools.map(tool => tool.name).sort(), ['get_document', 'get_section', 'list_sections', 'preview_document']);
+  assert.equal((await call('list_sections', {})).isError, false);
+  const write = await rpc('tools/call', { name: 'delete_section', arguments: { revision: 'x', sectionId: 'personal' } });
+  assert.equal(write.status, 403);
+  assert.match(write.headers['www-authenticate'], /error="insufficient_scope"/);
+  assert.match(write.headers['www-authenticate'], /resume:write/);
+});
+
+test('scope checks cover every call in a batch', async t => {
+  const { app, tokens } = await createMcpFixture(t, { scope: 'openid resume:read' });
+  const response = await request(app).post('/mcp').set('Authorization', `Bearer ${tokens.access_token}`)
+    .set('Accept', 'application/json, text/event-stream')
+    .send([
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_sections', arguments: {} } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'delete_section', arguments: { revision: 'x', sectionId: 'personal' } } }
+    ]);
+  assert.equal(response.status, 403);
+  assert.match(response.headers['www-authenticate'], /insufficient_scope/);
+});
+
+test('access tokens are audience-bound and expire after 15 minutes', async t => {
+  const { app, auth, tokens } = await createMcpFixture(t);
+  const payload = JSON.parse(Buffer.from(tokens.access_token.split('.')[1], 'base64url'));
+  assert.ok([payload.aud].flat().includes(MCP_URL));
+  assert.equal(payload.exp - payload.iat, 15 * 60);
+
+  // Without the MCP resource indicator the token is not bound to this endpoint.
+  const admin = await signInAdmin(auth, 'other@example.com');
+  const client = await registerClient(app);
+  const { location, verifier } = await startAuthorization(app, admin.cookie, client.client_id, 'openid resume:read', { resource: null });
+  const consent = await decideConsent(app, admin.cookie, location, true);
+  const unbound = await request(app).post('/auth/oauth2/token').type('form').send({
+    grant_type: 'authorization_code', code: new URL(consent.body.url).searchParams.get('code'),
+    redirect_uri: 'http://127.0.0.1:9999/callback', client_id: client.client_id, code_verifier: verifier
+  });
+  assert.equal(unbound.status, 200);
+  assert.equal((await mcpRpc(app, unbound.body.access_token)('tools/list')).status, 401);
+
+  t.mock.timers.enable({ apis: ['Date'], now: (payload.exp + 1) * 1000 });
+  const expired = await mcpRpc(app, tokens.access_token)('tools/list');
+  assert.equal(expired.status, 401);
+  assert.match(expired.headers['www-authenticate'], /invalid_token/);
+});
+
+test('denying consent returns access_denied to the client', async t => {
+  const { app, auth } = await createTestApp(t);
+  const admin = await signInAdmin(auth);
+  const client = await registerClient(app);
+  const { location } = await startAuthorization(app, admin.cookie, client.client_id, 'openid resume:read');
+  const denied = await decideConsent(app, admin.cookie, location, false);
+  assert.equal(denied.status, 200);
+  const redirect = new URL(denied.body.url);
+  assert.equal(`${redirect.origin}${redirect.pathname}`, 'http://127.0.0.1:9999/callback');
+  assert.equal(redirect.searchParams.get('error'), 'access_denied');
+  const apps = await request(app).get('/api/mcp').set('Cookie', admin.cookie).expect(200);
+  assert.deepEqual(apps.body.apps, []);
+});
+
+test('connected apps are per user and revoking stops refresh', async t => {
+  const { app, auth, storage } = await createTestApp(t);
+  const alice = await signInAdmin(auth, 'alice@example.com');
+  const bob = await signInAdmin(auth, 'bob@example.com');
+  const tokens = await authorizeMcpClient(app, alice.cookie);
+
+  const listed = await request(app).get('/api/mcp').set('Cookie', alice.cookie).expect(200);
+  assert.equal(listed.body.url, MCP_URL);
+  assert.equal(listed.body.serverName, 'cv_resume');
+  assert.deepEqual(listed.body.apps.map(entry => [entry.clientId, entry.name]), [[tokens.clientId, 'Test Client']]);
+  assert.deepEqual(listed.body.apps[0].scopes, ['openid', 'offline_access', 'resume:read', 'resume:write']);
+  assert.ok(listed.body.scopes['resume:write']);
+  assert.deepEqual((await request(app).get('/api/mcp').set('Cookie', bob.cookie).expect(200)).body.apps, []);
+
+  const rotated = await refresh(app, tokens.clientId, tokens.refresh_token);
+  assert.equal(rotated.status, 200);
+  assert.notEqual(rotated.body.refresh_token, tokens.refresh_token);
+
+  // Another user's revoke touches only their own grants.
+  await request(app).delete(`/api/mcp/apps/${tokens.clientId}`).set('Cookie', bob.cookie).set('Origin', ORIGIN).expect(200);
+  assert.equal((await request(app).get('/api/mcp').set('Cookie', alice.cookie)).body.apps.length, 1);
+  const latest = await refresh(app, tokens.clientId, rotated.body.refresh_token);
+  assert.equal(latest.status, 200);
+
+  const revoked = await request(app).delete(`/api/mcp/apps/${tokens.clientId}`).set('Cookie', alice.cookie).set('Origin', ORIGIN).expect(200);
+  assert.deepEqual(revoked.body.apps, []);
+  const { rows: [{ count }] } = await storage.pool.query('SELECT count(*)::int AS count FROM "oauthRefreshToken" WHERE "clientId" = $1 AND revoked IS NULL', [tokens.clientId]);
+  assert.equal(count, 0);
+  const afterRevoke = await refresh(app, tokens.clientId, latest.body.refresh_token);
+  assert.equal(afterRevoke.status, 400);
+  assert.equal(afterRevoke.body.error, 'invalid_grant');
+  const { rows: clients } = await storage.pool.query('SELECT 1 FROM "oauthClient" WHERE "clientId" = $1', [tokens.clientId]);
+  assert.equal(clients.length, 1);
+});
+
+test('connected-app management requires an admin session', async t => {
+  const { app } = await createTestApp(t);
+  await request(app).get('/api/mcp').expect(401);
+  await request(app).delete('/api/mcp/apps/anything').set('Origin', ORIGIN).expect(401);
+});
+
+test('CLI registrations with only loopback redirects register as native clients', async t => {
+  const { app } = await createTestApp(t);
+  const registered = await registerClient(app, { redirect_uris: ['http://localhost:4567/callback', 'http://127.0.0.1:4567/callback'] });
+  assert.ok(registered.client_id);
+  assert.equal(registered.application_type ?? 'native', 'native');
 });

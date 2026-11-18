@@ -1,32 +1,16 @@
-import { database } from './helpers/database.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { PostgresSessionStore } from '../storage.js';
 import request from 'supertest';
 import { renderErrorPage } from '../error-page.js';
-import { createApp } from '../server.js';
-
-const TEST_SESSION_SECRET = 'test-session-secret-that-is-longer-than-thirty-two-characters';
+import { createTestApp } from './helpers/oauth.js';
 
 async function createErrorFixture(t) {
-  const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-resume-errors-'));
-  t.after(() => fs.rmSync(dataDirectory, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dataDirectory, 'passcodes.json'), '[]', 'utf8');
-  fs.writeFileSync(path.join(dataDirectory, 'index.html'), '<h1>Resume</h1>', 'utf8');
-  const { storage } = await database(t, dataDirectory);
-  const sessionStore = new PostgresSessionStore(storage.pool);
-  t.after(() => sessionStore.close());
-  return createApp({
-    authConfig: { callbackUrl: 'https://resume.kaufmann.dev/auth/callback', postLogoutUrl: 'https://resume.kaufmann.dev/', sessionSecret: TEST_SESSION_SECRET },
-    oidcService: {},
-    sessionStore,
-    storage,
-    staticDirectory: dataDirectory,
-    now: () => Date.now()
+  const { app } = await createTestApp(t, {
+    seed: directory => fs.writeFileSync(path.join(directory, 'index.html'), '<h1>Resume</h1>', 'utf8')
   });
+  return app;
 }
 
 test('unknown paths return a 404 page to browsers and JSON to API clients', async t => {

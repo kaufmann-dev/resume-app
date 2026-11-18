@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { documentSchema } from './document-store.js';
 
 const passcodesSchema = z.array(z.object({ code: z.string().min(1), expires: z.string().optional() }));
-const keysSchema = z.array(z.object({ id: z.string(), name: z.string(), createdAt: z.string(), hash: z.string().regex(/^[a-f0-9]{64}$/) }));
 
 export async function transaction(pool, action) {
   const client = await pool.connect();
@@ -37,7 +36,6 @@ export function readMigrationData({ baseDirectory, directory = '/data', environm
   return {
     document,
     passcodes: passcodesSchema.parse(json('passcodes.json', [])),
-    keys: keysSchema.parse(json('api-keys.json', [])),
     pdf: pdf ? { bytes: fs.readFileSync(pdf), updatedAt: fs.statSync(pdf).mtime } : null
   };
 }
@@ -80,9 +78,7 @@ export async function initializeStorage({ pool, ...options }) {
     if (!completed.has(1)) {
       const data = readMigrationData(options);
       await client.query('INSERT INTO app_document VALUES (1, $1, $2)', [JSON.stringify(data.document), randomUUID()]);
-      for (const [name, value] of [['passcodes', data.passcodes], ['keys', data.keys]]) {
-        await client.query('INSERT INTO app_collections VALUES ($1, $2)', [name, JSON.stringify(value)]);
-      }
+      await client.query('INSERT INTO app_collections VALUES ($1, $2)', ['passcodes', JSON.stringify(data.passcodes)]);
       if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume.pdf', data.pdf.bytes, data.pdf.updatedAt]);
       await client.query('INSERT INTO app_migrations (version) VALUES (1)');
     }
@@ -92,6 +88,11 @@ export async function initializeStorage({ pool, ...options }) {
       const document = documentSchema.parse(pending.reduce((data, [, migrate]) => migrate(data), rows[0].data));
       await client.query('UPDATE app_document SET data = $1, revision = $2 WHERE id = 1', [JSON.stringify(document), randomUUID()]);
       for (const [version] of pending) await client.query('INSERT INTO app_migrations (version) VALUES ($1)', [version]);
+    }
+    // Migration 4: MCP clients authorize through OAuth; the former API-key hashes are discarded.
+    if (!completed.has(4)) {
+      await client.query("DELETE FROM app_collections WHERE name = 'keys'");
+      await client.query('INSERT INTO app_migrations (version) VALUES (4)');
     }
   });
   console.log('PostgreSQL storage ready; migrations complete');
