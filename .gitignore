@@ -19,6 +19,7 @@ dist-ssr/
 *.log
 passcodes.json
 resume.json
+/resume.pdf
 cv.json
 .sessions/
 

@@ -47,7 +47,6 @@ resume-app/
 |-- mcp.js              # MCP tools and the OAuth-protected /mcp endpoint
 |-- document.json.example # Template for shared content
 |-- passcodes.json.example # Template for passcodes
-|-- resume.pdf          # Initial PDF seed; uploads live in PostgreSQL
 |-- deploy.sh           # Deployment helper for VPS
 |-- package.json
 |-- package-lock.json
@@ -80,7 +79,7 @@ Import validation, schema creation, and the migration record commit together in 
 
 **Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** Viewer passcodes remain valid after import, subject to their existing expiry rules.
 
-For a fresh installation without content files, the app creates an empty document and an empty passcode list and imports the repository PDF if available. Log in through OIDC to populate the app. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. Never copy examples over existing production files.
+For a fresh installation without content files, the app starts with an empty document, an empty passcode list, and no résumé PDF. Log in through OIDC to add content and upload a PDF. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. To seed a PDF, place it at `/data/resume.pdf` before first startup. Never copy examples over existing production files.
 
 The admin **Content** tab edits one shared list. The sidebar shows visibility and item counts; entry headings expand using the keyboard or pointer. Field visibility sits beside each field label, and bullets use multiline inputs. Choose **Always** or **Full view only** for sections, items, rows, authors, bullets, tags, and individual content fields. New content defaults to Always. Hiding a parent hides its descendants, regardless of their visibility. Language selection remains independent of visibility.
 
