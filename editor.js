@@ -569,6 +569,9 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
     const codeInp = h('input', { className: 'ed-input', type: 'text', 'aria-label': 'Passcode', value: entry.code || '' });
     let codeDebounce = null;
     codeInp.addEventListener('input', () => {
+      const { selectionStart, selectionEnd } = codeInp;
+      codeInp.value = codeInp.value.toUpperCase();
+      codeInp.setSelectionRange(selectionStart, selectionEnd);
       entry.code = codeInp.value;
       header.querySelector('.ed-item-title-text').textContent = entry.code || '(empty)';
       clearTimeout(codeDebounce);

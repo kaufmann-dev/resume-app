@@ -66,7 +66,7 @@ test('viewer sessions use opaque cookies and enforce expiry and immediate revoca
 
   const login = await viewer
     .post('/api/auth/passcode')
-    .send({ passcode: 'VIEWER-CODE' });
+    .send({ passcode: 'viewer-code' });
   assert.equal(login.status, 200);
   assert.equal(login.body.isAdmin, false);
 
@@ -236,8 +236,10 @@ test('admins manage passcodes and logout continues to the provider', async (t) =
   const restored = await as(request(app).get('/api/session')).expect(200);
   assert.equal(restored.body.isAdmin, true);
   assert.deepEqual(restored.body.passcodesData, [{ code: 'viewer-code', expires: '2099-12-31T23:59:59.999Z' }]);
-  await as(request(app).post('/api/passcodes')).send({ code: 'managed-code', expires: '2099-01-01T00:00:00.000Z' }).expect(200);
-  await as(request(app).put('/api/passcodes/1')).send({ code: 'managed-code-updated', expires: '2099-02-01T00:00:00.000Z' }).expect(200);
+  const added = await as(request(app).post('/api/passcodes')).send({ code: 'managed-code', expires: '2099-01-01T00:00:00.000Z' }).expect(200);
+  assert.equal(added.body.passcodes[1].code, 'MANAGED-CODE');
+  const updated = await as(request(app).put('/api/passcodes/1')).send({ code: 'managed-code-updated', expires: '2099-02-01T00:00:00.000Z' }).expect(200);
+  assert.equal(updated.body.passcodes[1].code, 'MANAGED-CODE-UPDATED');
   await as(request(app).delete('/api/passcodes/1')).expect(200);
 
   const logout = await as(request(app).post('/auth/logout'));

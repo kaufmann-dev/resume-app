@@ -73,9 +73,7 @@ function validateViewerPasscode(passcodes, passcode, now) {
     return { ok: false, status: 401, error: 'Not authenticated' };
   }
 
-  // Viewers type codes in capitals, so matching ignores case.
-  const normalized = passcode.toUpperCase();
-  const match = passcodes.find((entry) => entry.code.toUpperCase() === normalized);
+  const match = passcodes.find((entry) => entry.code === passcode);
 
   if (!match) {
     return { ok: false, status: 401, error: 'Invalid passcode' };
@@ -501,11 +499,12 @@ export function createApp({
 
     const { code, expires } = request.body;
 
-    if (!code || !expires) {
+    if (typeof code !== 'string' || !code || !expires) {
       return response.status(400).json({ error: 'Missing code or expires' });
     }
 
-    const passcodes = await storage.mutateCollection('passcodes', entries => { entries.push({ code, expires }); });
+    // Viewers type codes in capitals, so codes are stored that way.
+    const passcodes = await storage.mutateCollection('passcodes', entries => { entries.push({ code: code.toUpperCase(), expires }); });
     return response.json({ success: true, passcodes });
   });
 
@@ -514,14 +513,14 @@ export function createApp({
       if (!requireAdmin(request, response)) return;
       const index = Number(request.params.index);
       const { code, expires } = request.body ?? {};
-      if (method === 'put' && (!code || !expires)) return response.status(400).json({ error: 'Missing code or expires' });
+      if (method === 'put' && (typeof code !== 'string' || !code || !expires)) return response.status(400).json({ error: 'Missing code or expires' });
       const passcodes = await storage.mutateCollection('passcodes', entries => {
         if (!Number.isInteger(index) || index < 0 || index >= entries.length) {
           const error = new Error('Invalid index');
           error.status = 400;
           throw error;
         }
-        if (method === 'put') entries[index] = { code, expires };
+        if (method === 'put') entries[index] = { code: code.toUpperCase(), expires };
         else entries.splice(index, 1);
       });
       response.json({ success: true, passcodes });

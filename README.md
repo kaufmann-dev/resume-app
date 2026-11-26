@@ -124,7 +124,7 @@ Every section, entry, row, author, bullet, and tag has `visibility: "all" | "ful
 
 Notes:
 
-- **Viewer passcodes**: New viewer passcodes require an `expires` date. The login field shows the code as typed, converted to capitals, and matching ignores case. PostgreSQL is checked on every authenticated request, so expiry, edits, and deletion take effect immediately. Failed login attempts are limited to five per 15 minutes for each proxy-derived client IP; valid passcodes bypass the limiter.
+- **Viewer passcodes**: New viewer passcodes require an `expires` date. Codes are stored in capitals; the login field shows the code as typed, converted to capitals, and must match exactly. PostgreSQL is checked on every authenticated request, so expiry, edits, and deletion take effect immediately. Failed login attempts are limited to five per 15 minutes for each proxy-derived client IP; valid passcodes bypass the limiter.
 - **Admin access**: The OIDC provider's access policy is the only admin admission control. Every user it lets sign in is an admin who can edit content, manage viewer passcodes and connect MCP apps.
 - **Cookies**: Viewer sessions use the opaque host-only `resume_session` cookie; admin sessions use Better Auth's `resume.session_token` cookie. Both are `HttpOnly`, `SameSite=Lax`, and `Secure` on HTTPS, and both have a 24-hour sliding idle limit and a seven-day absolute limit; background session checks do not extend the idle limit. Theme and language preferences remain separate and are shared across `.kaufmann.dev` subdomains.
 
