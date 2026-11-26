@@ -448,6 +448,12 @@ adminLoginButton.addEventListener('click', () => {
   loginUrl.searchParams.set('returnTo', window.location.href);
   window.location.assign(loginUrl.toString());
 });
+// Codes show as typed, in capitals; the caret stays where it was.
+passcodeInput.addEventListener('input', () => {
+  const { selectionStart, selectionEnd } = passcodeInput;
+  passcodeInput.value = passcodeInput.value.toUpperCase();
+  passcodeInput.setSelectionRange(selectionStart, selectionEnd);
+});
 passcodeInput.addEventListener('keypress', (event) => {
   if (event.key === 'Enter') handleLogin();
 });

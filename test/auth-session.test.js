@@ -66,7 +66,7 @@ test('viewer sessions use opaque cookies and enforce expiry and immediate revoca
 
   const login = await viewer
     .post('/api/auth/passcode')
-    .send({ passcode: 'viewer-code' });
+    .send({ passcode: 'VIEWER-CODE' });
   assert.equal(login.status, 200);
   assert.equal(login.body.isAdmin, false);
 

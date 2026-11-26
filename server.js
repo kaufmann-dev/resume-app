@@ -73,7 +73,9 @@ function validateViewerPasscode(passcodes, passcode, now) {
     return { ok: false, status: 401, error: 'Not authenticated' };
   }
 
-  const match = passcodes.find((entry) => entry.code === passcode);
+  // Viewers type codes in capitals, so matching ignores case.
+  const normalized = passcode.toUpperCase();
+  const match = passcodes.find((entry) => entry.code.toUpperCase() === normalized);
 
   if (!match) {
     return { ok: false, status: 401, error: 'Invalid passcode' };
