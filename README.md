@@ -7,8 +7,8 @@ A small personal resume app built with Vite on the frontend and Express on the b
 - Compact and full views of one document, switched from the toolbar or opened directly with `?view=full`
 - App-owned viewer passcodes with OIDC-protected admin/editor access
 - Theme and language preferences shared across `.kaufmann.dev` subdomains
-- PDF download through the authenticated backend
-- PDF replacement upload from the admin editor
+- Résumé PDF download through the authenticated backend, with one English and one German PDF; viewers choose the language when both exist
+- Per-language PDF upload and removal from the admin editor
 - PDF attachments for publications, opened in a new tab by signed-in viewers
 - Content editor with visibility controls for sections, items, fields, bullets, tags, and authors
 - Remote MCP server at `/mcp`: AI apps connect with the URL alone, sign in through Pocket ID, and ask for explicit consent; access is managed in the editor's MCP tab
@@ -73,13 +73,13 @@ PostgreSQL is the only runtime store. Content and visibility settings use JSONB 
 
 ### Initial import and shared content
 
-On the first startup against a new database, the app imports `document.json`, `passcodes.json`, and `resume.pdf`. For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
+On the first startup against a new database, the app imports `document.json`, `passcodes.json`, and `resume.pdf` (as the English résumé PDF). For each file, the first existing source wins: `/data`, the old `DATA_DIRECTORY` if set, the project's `data/` directory, then its root. Empty lists are respected. Without `document.json`, the app starts with an empty document.
 
-Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Migration version 3 removes the obsolete per-section `open` flag. Migration version 4 deletes the former MCP API-key hashes. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so deleted content cannot return on restart. Do not delete that record.
+Import validation, schema creation, and the migration record commit together in one transaction. Migration version 2 converts the former `cv`/`resume`/`both` visibility values to `full`/`all`; resume-only content has no equivalent, so it stops startup until that content is changed or removed. Migration version 3 removes the obsolete per-section `open` flag. Migration version 4 deletes the former MCP API-key hashes. Migration version 5 turns the former single résumé PDF into the English PDF. Malformed input stops startup and rolls back; fix the source and redeploy to retry. A database lock serializes simultaneous startup. Originals remain untouched. Once migration version 1 exists in `app_migrations`, files are never imported again, so deleted content cannot return on restart. Do not delete that record.
 
 **Existing file-based browser sessions are not imported. Everyone must log in again after this deployment.** Viewer passcodes remain valid after import, subject to their existing expiry rules.
 
-For a fresh installation without content files, the app starts with an empty document, an empty passcode list, and no résumé PDF. Log in through OIDC to add content and upload a PDF. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. To seed a PDF, place it at `/data/resume.pdf` before first startup. Never copy examples over existing production files.
+For a fresh installation without content files, the app starts with an empty document, an empty passcode list, and no résumé PDF. Log in through OIDC to add content and upload a PDF. To seed from examples, copy `document.json.example` and `passcodes.json.example` into `/data` as `document.json` and `passcodes.json` **before the first startup**. To seed the English PDF, place it at `/data/resume.pdf` before first startup; upload the German PDF in the editor. Never copy examples over existing production files.
 
 The admin **Content** tab edits one shared list. The sidebar shows visibility and item counts; entry headings expand using the keyboard or pointer. Field visibility sits beside each field label, and bullets use multiline inputs. Choose **Always** or **Full view only** for sections, items, rows, authors, bullets, tags, and individual content fields. New content defaults to Always. Hiding a parent hides its descendants, regardless of their visibility. Language selection remains independent of visibility.
 
@@ -337,15 +337,17 @@ server {
 
 ## PDF Download and Upload
 
-The PDF download is served by the backend, not directly by nginx static hosting. Admins replace it from the editor **PDF** tab, which shows the current file size and date. It uploads with `POST /api/pdf` (`Content-Type: application/pdf`, up to 10 MB); the upload is validated as a PDF and replaced atomically in PostgreSQL. `GET /api/pdf` reports the current file metadata. Both endpoints require admin access.
+The résumé PDF is stored once per language (`en`, `de`) and served by the backend, not directly by nginx static hosting. Admins manage both from the editor **PDF** tab, which shows each file's size and date. `POST /api/pdf/:lang` uploads a file (`Content-Type: application/pdf`, up to 10 MB); the upload is validated as a PDF and replaced atomically in PostgreSQL. `DELETE /api/pdf/:lang` removes a language's file. `GET /api/pdf` reports the metadata of both languages. These endpoints require admin access.
 
-The current implementation:
+The session response lists the uploaded languages as `pdfLanguages`. The toolbar hides **Download PDF** when no PDF exists, downloads directly when one exists, and expands a Deutsch/English choice (current page language first) when both exist.
+
+The download:
 
 - validates the current admin or viewer session before download
 - re-checks viewer passcode revocation and expiry
 - reuses the session cookie when available
-- serves PDF bytes from PostgreSQL through the Express download endpoint
-- triggers the browser download from the frontend with a normal navigation to `/api/download`
+- serves PDF bytes from PostgreSQL through `GET /api/download?lang=en|de` as `David_Kaufmann_Resume.pdf` or `David_Kaufmann_Lebenslauf.pdf`; a missing or unknown `lang` returns 400, a language without a file 404
+- triggers the browser download from the frontend with a normal navigation to that endpoint
 
 ### Publication PDFs
 

@@ -24,14 +24,26 @@ test('migration imports content, passcodes and exact PDF bytes once, leaving ori
   fs.writeFileSync(path.join(directory, 'resume.pdf'), pdf);
   const storage = await initializeStorage(options);
   assert.deepEqual(await storage.readCollection('passcodes'), passcodes);
-  assert.deepEqual((await storage.readPdf('resume.pdf')).bytes, pdf);
+  assert.deepEqual((await storage.readPdf('resume-en.pdf')).bytes, pdf);
   await storage.mutateCollection('passcodes', entries => { entries.length = 0; });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'passcodes.json'))), passcodes);
   fs.writeFileSync(path.join(directory, 'document.json'), 'broken');
   await initializeStorage(options);
   assert.deepEqual(await storage.readCollection('passcodes'), []);
-  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4]);
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4, 5]);
   assert.equal((await pool.query("SELECT 1 FROM app_collections WHERE name = 'keys'")).rowCount, 0);
+});
+
+test('the single résumé PDF becomes the English PDF once', async t => {
+  const { options, pool } = await fixture(t);
+  const storage = await initializeStorage(options);
+  const pdf = Buffer.from('%PDF-legacy', 'latin1');
+  await pool.query("INSERT INTO app_pdf VALUES ('resume.pdf', $1, now())", [pdf]);
+  await pool.query('DELETE FROM app_migrations WHERE version = 5');
+  await initializeStorage(options);
+  assert.equal(await storage.readPdf('resume.pdf'), undefined);
+  assert.deepEqual((await storage.readPdf('resume-en.pdf')).bytes, pdf);
+  assert.equal((await pool.query('SELECT 1 FROM app_migrations WHERE version = 5')).rowCount, 1);
 });
 
 test('volume data takes precedence over old paths, including empty lists', async t => {
@@ -84,7 +96,7 @@ test('visibility migration converts both and cv to all and full once', async t =
   assert.equal(section.items[0].visibility, 'all');
   assert.deepEqual(section.items[0].fieldVisibility, { info: 'full' });
   assert.equal(section.items[0].highlights[0].visibility, 'full');
-  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4]);
+  assert.deepEqual((await pool.query('SELECT version FROM app_migrations ORDER BY version')).rows.map(row => row.version), [1, 2, 3, 4, 5]);
 });
 
 test('section open defaults are removed once', async t => {

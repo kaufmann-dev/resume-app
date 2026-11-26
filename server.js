@@ -25,8 +25,9 @@ import { SITE_ORIGIN, isLocalDevelopmentHostname } from './site-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PDF_NAME = 'resume.pdf';
-const PDF_DOWNLOAD_NAME = 'David_Kaufmann_Resume.pdf';
+const RESUME_PDF_LANGUAGES = ['en', 'de'];
+const resumePdfName = lang => `resume-${lang}.pdf`;
+const RESUME_PDF_DOWNLOAD_NAMES = { en: 'David_Kaufmann_Resume.pdf', de: 'David_Kaufmann_Lebenslauf.pdf' };
 export const PASSCODE_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 export const PASSCODE_RATE_LIMIT_MAX_FAILURES = 5;
 
@@ -327,11 +328,21 @@ export function createApp({
     return true;
   }
 
+  // Uploaded résumé PDFs in the order of RESUME_PDF_LANGUAGES, without their bytes.
+  async function listResumePdfs() {
+    const rows = await storage.readPdfMetadata(RESUME_PDF_LANGUAGES.map(resumePdfName));
+    return RESUME_PDF_LANGUAGES.flatMap(lang => {
+      const row = rows.find(entry => entry.name === resumePdfName(lang));
+      return row ? [{ lang, size: row.size, updatedAt: row.updatedAt }] : [];
+    });
+  }
+
   async function buildSessionResponse(request) {
     const document = await store.read();
     const response = {
       success: true,
       data: document.data,
+      pdfLanguages: (await listResumePdfs()).map(pdf => pdf.lang),
       isAdmin: request.authContext.kind === 'admin'
     };
 
@@ -375,7 +386,13 @@ export function createApp({
       return;
     }
 
-    const pdf = await storage.readPdf(PDF_NAME);
+    const { lang } = request.query;
+
+    if (!RESUME_PDF_LANGUAGES.includes(lang)) {
+      return response.status(400).send('Unknown PDF language');
+    }
+
+    const pdf = await storage.readPdf(resumePdfName(lang));
 
     if (!pdf) {
       return response.status(404).send('PDF not found');
@@ -383,18 +400,27 @@ export function createApp({
 
     response.set(PDF_RESPONSE_HEADERS);
 
-    return response.attachment(PDF_DOWNLOAD_NAME).type('application/pdf').send(pdf.bytes);
+    return response.attachment(RESUME_PDF_DOWNLOAD_NAMES[lang]).type('application/pdf').send(pdf.bytes);
   });
 
   app.get('/api/pdf', async (request, response) => {
     if (!requireAdmin(request, response)) return;
-    const pdf = await storage.readPdf(PDF_NAME);
-    if (!pdf) return response.json({ file: PDF_NAME, exists: false });
-    return response.json({ file: PDF_NAME, exists: true, size: pdf.bytes.length, updatedAt: pdf.updatedAt.toISOString() });
+    const pdfs = await listResumePdfs();
+    return response.json({
+      files: RESUME_PDF_LANGUAGES.map(lang => {
+        const pdf = pdfs.find(entry => entry.lang === lang);
+        return pdf ? { lang, exists: true, size: pdf.size, updatedAt: pdf.updatedAt.toISOString() } : { lang, exists: false };
+      })
+    });
   });
 
+  const requireResumePdfLanguage = (request, response, next) => RESUME_PDF_LANGUAGES.includes(request.params.lang)
+    ? next()
+    : response.status(400).json({ error: 'Unknown PDF language' });
+
+  const adminOnly = (request, response, next) => { if (requireAdmin(request, response)) next(); };
   const pdfUpload = [
-    (request, response, next) => { if (requireAdmin(request, response)) next(); },
+    adminOnly,
     express.raw({ type: 'application/pdf', limit: PDF_LIMIT_BYTES }),
     (request, response, next) => {
       if (!Buffer.isBuffer(request.body) || !request.body.length) {
@@ -407,9 +433,15 @@ export function createApp({
     }
   ];
 
-  app.post('/api/pdf', ...pdfUpload, async (request, response) => {
-    const metadata = await storage.writePdf(PDF_NAME, request.body);
-    return response.json({ success: true, file: PDF_NAME, ...metadata });
+  app.post('/api/pdf/:lang', ...pdfUpload, requireResumePdfLanguage, async (request, response) => {
+    const { lang } = request.params;
+    const metadata = await storage.writePdf(resumePdfName(lang), request.body);
+    return response.json({ success: true, lang, ...metadata });
+  });
+
+  app.delete('/api/pdf/:lang', adminOnly, requireResumePdfLanguage, async (request, response) => {
+    if (!await storage.deletePdf(resumePdfName(request.params.lang))) return response.status(404).json({ error: 'PDF not found' });
+    return response.json({ success: true });
   });
 
   // Uploads stay unreferenced until the editor saves the returned id into a publication.

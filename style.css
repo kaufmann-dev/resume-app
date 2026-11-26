@@ -333,6 +333,15 @@ header {
   white-space: nowrap;
 }
 
+/* PDF language choices sit indented under the download action, aligned with its label. */
+.tbtn-sub[hidden] {
+  display: none;
+}
+
+.tbtn--sub {
+  padding-left: 42px;
+}
+
 /* Wide screens mirror the section nav: the actions sit in the right margin with their labels always visible. */
 @media (min-width: 1240px) {
   .menu-btn {
@@ -369,6 +378,10 @@ header {
   .tbtn:active {
     background: none;
     color: var(--t1);
+  }
+
+  .tbtn--sub {
+    padding-left: 26px;
   }
 }
 

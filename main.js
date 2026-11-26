@@ -10,6 +10,7 @@ const PREF_COOKIE_MAX_AGE = 31536000;
 let lang = DEFAULT_LANG;
 let theme = DEFAULT_THEME;
 let sourceDocument = null;
+let pdfLanguages = [];
 let view = new URLSearchParams(window.location.search).get('view') === 'full' ? 'full' : 'compact';
 
 const API_BASE_URL = isLocalDevelopmentHostname(window.location.hostname)
@@ -24,6 +25,7 @@ const adminLoginButton = document.getElementById('admin-login-btn');
 const authTitle = document.getElementById('auth-title');
 const authDividerLabel = document.getElementById('auth-divider-label');
 const downloadButton = document.getElementById('btn-dl');
+const downloadOptions = document.getElementById('dl-options');
 const logoutButton = document.getElementById('btn-logout');
 const editButton = document.getElementById('btn-edit');
 
@@ -133,6 +135,7 @@ function applyChrome() {
   }
   applyThemeIcons();
   applyViewIcons();
+  applyDownloadButton();
   applyLegalFooter();
 }
 
@@ -284,6 +287,8 @@ function showAuthView(message = '') {
   logoutButton.style.display = 'none';
   editButton.style.display = 'none';
   sourceDocument = null;
+  pdfLanguages = [];
+  applyDownloadButton();
 }
 
 async function authenticate(options = {}) {
@@ -319,6 +324,8 @@ async function authenticate(options = {}) {
     }
 
     sourceDocument = result.data;
+    pdfLanguages = result.pdfLanguages;
+    applyDownloadButton();
     showAuthenticatedView();
     render();
 
@@ -332,6 +339,10 @@ async function authenticate(options = {}) {
           onSave: (data) => {
             sourceDocument = data;
             render();
+          },
+          onPdfLanguagesChange: (languages) => {
+            pdfLanguages = languages;
+            applyDownloadButton();
           }
         });
 
@@ -369,6 +380,43 @@ async function handleLogin() {
   }
 }
 
+const PDF_LANGUAGE_NAMES = { en: 'English', de: 'Deutsch' };
+
+// One uploaded PDF downloads directly; with both languages the button discloses a choice.
+function applyDownloadButton() {
+  downloadButton.style.display = pdfLanguages.length ? '' : 'none';
+  setDownloadOptionsOpen(false);
+  if (pdfLanguages.length > 1) {
+    downloadButton.setAttribute('aria-controls', 'dl-options');
+    downloadButton.setAttribute('aria-expanded', 'false');
+  } else {
+    downloadButton.removeAttribute('aria-controls');
+    downloadButton.removeAttribute('aria-expanded');
+  }
+  const ordered = [...pdfLanguages].sort((a, b) => (b === lang) - (a === lang));
+  downloadOptions.replaceChildren(...(pdfLanguages.length > 1 ? ordered : []).map((pdfLang) => {
+    const option = document.createElement('button');
+    option.className = 'tbtn tbtn--sub';
+    option.type = 'button';
+    option.lang = pdfLang;
+    option.textContent = PDF_LANGUAGE_NAMES[pdfLang];
+    option.addEventListener('click', () => downloadPdf(pdfLang));
+    return option;
+  }));
+}
+
+function setDownloadOptionsOpen(open) {
+  downloadOptions.hidden = !open;
+  if (downloadButton.hasAttribute('aria-expanded')) downloadButton.setAttribute('aria-expanded', String(open));
+}
+
+function downloadPdf(pdfLang) {
+  setDownloadOptionsOpen(false);
+  const url = buildApiUrl('/api/download');
+  url.searchParams.set('lang', pdfLang);
+  window.location.assign(url.toString());
+}
+
 function handleDownload() {
   if (!sourceDocument) {
     showAuthView(localize({
@@ -378,7 +426,8 @@ function handleDownload() {
     return;
   }
 
-  window.location.assign(buildApiUrl('/api/download').toString());
+  if (pdfLanguages.length === 1) downloadPdf(pdfLanguages[0]);
+  else setDownloadOptionsOpen(downloadOptions.hidden);
 }
 
 async function restoreStoredSession() {
@@ -447,6 +496,7 @@ editButton.addEventListener('click', async () => {
 });
 
 function setMenuOpen(open) {
+  if (!open) setDownloadOptionsOpen(false);
   toolbarWrap.classList.toggle('open', open);
   menuButton.setAttribute('aria-expanded', String(open));
 }
@@ -454,13 +504,17 @@ function setMenuOpen(open) {
 menuButton.addEventListener('click', () => setMenuOpen(!toolbarWrap.classList.contains('open')));
 // Choosing an action closes the menu; clicks outside or Escape dismiss it.
 document.getElementById('toolbar').addEventListener('click', (event) => {
-  if (event.target.closest('.tbtn')) setMenuOpen(false);
+  const button = event.target.closest('.tbtn');
+  if (button && !button.hasAttribute('aria-expanded')) setMenuOpen(false);
 });
 document.addEventListener('click', (event) => {
   if (!toolbarWrap.contains(event.target)) setMenuOpen(false);
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && toolbarWrap.classList.contains('open')) {
+  if (event.key === 'Escape' && !downloadOptions.hidden) {
+    setDownloadOptionsOpen(false);
+    downloadButton.focus();
+  } else if (event.key === 'Escape' && toolbarWrap.classList.contains('open')) {
     setMenuOpen(false);
     menuButton.focus();
   }

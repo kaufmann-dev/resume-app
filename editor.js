@@ -446,7 +446,7 @@ export function toggleEditor() {
   }
 }
 
-export function initEditor({ document: initialDocument, passcodesData, apiBaseUrl, onSave }) {
+export function initEditor({ document: initialDocument, passcodesData, apiBaseUrl, onSave, onPdfLanguagesChange }) {
   isEditorOpen = false;
   let data = structuredClone(initialDocument.data);
   let revision = initialDocument.revision;
@@ -710,58 +710,77 @@ export function initEditor({ document: initialDocument, passcodesData, apiBaseUr
   function renderPdf() {
     const wrap = h('div', { className: 'ed-settings-page' });
     wrap.appendChild(h('header', { className: 'ed-page-heading' }, h('h1', {}, 'PDF Download'),
-      h('p', {}, 'Replace the PDF that viewers download from the toolbar.')));
-    const current = h('section', { className: 'ed-panel' }, h('h2', {}, 'Current file'));
-    const status = h('p', { className: 'ed-help' }, 'Loading…');
-    const downloadRow = h('p', { className: 'ed-help' }, h('a', { className: 'ed-btn', href: String(buildApiUrl('/api/download')) }, 'Download current PDF'));
-    downloadRow.hidden = true;
-    const retry = h('button', { className: 'ed-btn', type: 'button' }, 'Retry');
-    const retryRow = h('p', { className: 'ed-help' }, retry);
-    retryRow.hidden = true;
-    retry.addEventListener('click', () => refresh());
-    current.append(status, downloadRow, retryRow);
+      h('p', {}, 'Upload one PDF per language. With both uploaded, viewers choose the language when downloading; with one, it downloads directly.')));
+    const panels = h('div', {}, h('section', { className: 'ed-panel' }, h('p', { className: 'ed-help' }, 'Loading…')));
+    wrap.appendChild(panels);
     async function refresh() {
-      retryRow.hidden = true;
       try {
         const response = await fetch(buildApiUrl('/api/pdf'), { credentials: 'include' });
         const info = await response.json();
         if (!response.ok) throw new Error(info.error);
-        status.textContent = info.exists
-          ? `${info.file} · ${formatBytes(info.size)} · updated ${new Date(info.updatedAt).toLocaleString()}`
-          : 'No PDF uploaded yet.';
-        downloadRow.hidden = !info.exists;
-      } catch (error) { status.textContent = `Could not load PDF info: ${error.message}`; retryRow.hidden = false; }
+        panels.replaceChildren(...info.files.map(file => renderResumePdfPanel(file, refresh)));
+        onPdfLanguagesChange?.(info.files.filter(file => file.exists).map(file => file.lang));
+      } catch (error) {
+        panels.replaceChildren(h('section', { className: 'ed-panel' },
+          h('p', { className: 'ed-help', role: 'alert' }, `Could not load PDF info: ${error.message}`),
+          h('p', { className: 'ed-help' }, h('button', { className: 'ed-btn', type: 'button', onClick: () => refresh() }, 'Retry'))));
+      }
     }
     refresh();
-    wrap.appendChild(current);
-    const panel = h('section', { className: 'ed-panel' }, h('h2', {}, 'Upload a newer version'),
-      h('p', { className: 'ed-help' }, 'PDF only, up to 10 MB. The current file is replaced immediately.'));
-    const input = h('input', { id: 'ed-pdf-file', type: 'file', accept: 'application/pdf,.pdf' });
-    const upload = h('button', { className: 'ed-btn ed-btn--save', type: 'button' }, 'Upload PDF');
+    return wrap;
+  }
+
+  function renderResumePdfPanel(file, refresh) {
+    const title = { en: 'English PDF', de: 'German PDF' }[file.lang];
+    const panel = h('section', { className: 'ed-panel' }, h('h2', {}, title),
+      h('p', { className: 'ed-help' }, file.exists
+        ? `${formatBytes(file.size)} · updated ${new Date(file.updatedAt).toLocaleString()}`
+        : 'No PDF uploaded.'));
+    const downloadUrl = buildApiUrl('/api/download');
+    downloadUrl.searchParams.set('lang', file.lang);
+    if (file.exists) {
+      panel.appendChild(h('p', { className: 'ed-help' },
+        h('a', { className: 'ed-btn', href: String(downloadUrl) }, 'Download'), ' ',
+        h('button', { className: 'ed-btn ed-btn--danger', type: 'button', onClick: async () => {
+          if (!await confirmDialog(`Remove the ${title}?`, 'Remove')) return;
+          try {
+            const response = await fetch(buildApiUrl(`/api/pdf/${file.lang}`), { method: 'DELETE', credentials: 'include' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error);
+            showToast(`${title} removed`);
+            refresh();
+          } catch (error) { showToast(error.message, true); }
+        } }, 'Remove')));
+    }
+    const inputId = `ed-pdf-file-${file.lang}`;
+    const uploadLabel = file.exists ? 'Replace PDF' : 'Upload PDF';
+    const input = h('input', { id: inputId, type: 'file', accept: 'application/pdf,.pdf' });
+    const upload = h('button', { className: 'ed-btn ed-btn--save', type: 'button' }, uploadLabel);
     upload.addEventListener('click', async () => {
-      const file = input.files[0];
-      if (!file) { showToast('Choose a PDF file first', true); return; }
-      if (file.size > 10 * 1024 * 1024) { showToast('PDF exceeds the 10 MB limit', true); return; }
+      const selected = input.files[0];
+      if (!selected) { showToast('Choose a PDF file first', true); return; }
+      if (selected.size > 10 * 1024 * 1024) { showToast('PDF exceeds the 10 MB limit', true); return; }
       upload.disabled = true;
       upload.textContent = 'Uploading…';
       try {
-        const response = await fetch(buildApiUrl('/api/pdf'), {
+        const response = await fetch(buildApiUrl(`/api/pdf/${file.lang}`), {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/pdf' },
-          body: file
+          body: selected
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error);
-        input.value = '';
-        showToast('PDF updated');
+        showToast(`${title} updated`);
         refresh();
-      } catch (error) { showToast(error.message, true); }
-      finally { upload.disabled = false; upload.textContent = 'Upload PDF'; }
+      } catch (error) {
+        showToast(error.message, true);
+        upload.disabled = false;
+        upload.textContent = uploadLabel;
+      }
     });
-    panel.append(h('div', { className: 'ed-file-form' },
-      h('label', { className: 'ed-field-label', htmlFor: 'ed-pdf-file' }, 'PDF file'), input, upload));
-    wrap.appendChild(panel);
-    return wrap;
+    panel.append(h('p', { className: 'ed-help' }, 'PDF only, up to 10 MB. The current file is replaced immediately.'),
+      h('div', { className: 'ed-file-form' }, h('label', { className: 'ed-field-label', htmlFor: inputId }, 'PDF file'), input, upload));
+    return panel;
   }
 
   function copyField(label, value) {

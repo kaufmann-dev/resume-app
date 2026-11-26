@@ -21,54 +21,86 @@ async function createPdfFixture(t) {
   return { app, storage, dataDirectory, admin, viewer };
 }
 
-test('admin uploads replace the downloadable PDF', async t => {
+test('admin uploads replace the English PDF', async t => {
   const { storage, admin } = await createPdfFixture(t);
   const before = await admin.get('/api/pdf').expect(200);
-  assert.equal(before.body.exists, true);
-  assert.equal(before.body.file, 'resume.pdf');
-  assert.equal(before.body.size, Buffer.byteLength('test pdf'));
+  assert.deepEqual(before.body.files.map(({ lang, exists, size }) => ({ lang, exists, size })), [
+    { lang: 'en', exists: true, size: Buffer.byteLength('test pdf') },
+    { lang: 'de', exists: false, size: undefined }
+  ]);
 
-  const uploaded = await admin.post('/api/pdf')
+  const uploaded = await admin.post('/api/pdf/en')
     .set('Content-Type', 'application/pdf')
     .send(PDF_BYTES)
     .expect(200);
   assert.equal(uploaded.body.success, true);
+  assert.equal(uploaded.body.lang, 'en');
   assert.equal(uploaded.body.size, PDF_BYTES.length);
   assert.ok(Date.parse(uploaded.body.updatedAt) > 0);
-  assert.deepEqual((await storage.readPdf('resume.pdf')).bytes, PDF_BYTES);
+  assert.deepEqual((await storage.readPdf('resume-en.pdf')).bytes, PDF_BYTES);
 
   const after = await admin.get('/api/pdf').expect(200);
-  assert.equal(after.body.size, PDF_BYTES.length);
+  assert.equal(after.body.files[0].size, PDF_BYTES.length);
 
-  const download = await admin.get('/api/download').expect(200);
+  const download = await admin.get('/api/download?lang=en').expect(200);
   assert.match(download.headers['content-type'], /application\/pdf/);
+  assert.equal(download.headers['content-disposition'], 'attachment; filename=David_Kaufmann_Resume.pdf');
   assert.deepEqual(download.body, PDF_BYTES);
+});
+
+test('a German PDF adds a download language and can be removed again', async t => {
+  const { admin, viewer } = await createPdfFixture(t);
+  const languages = async () => (await viewer.get('/api/session').expect(200)).body.pdfLanguages;
+  assert.deepEqual(await languages(), ['en']);
+  await viewer.get('/api/download?lang=de').expect(404);
+
+  await admin.post('/api/pdf/de').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(200);
+  assert.deepEqual(await languages(), ['en', 'de']);
+  const download = await viewer.get('/api/download?lang=de').expect(200);
+  assert.equal(download.headers['content-disposition'], 'attachment; filename=David_Kaufmann_Lebenslauf.pdf');
+  assert.deepEqual(download.body, PDF_BYTES);
+
+  await admin.delete('/api/pdf/de').expect(200);
+  assert.deepEqual(await languages(), ['en']);
+  await admin.delete('/api/pdf/de').expect(404);
+});
+
+test('unknown PDF languages are rejected', async t => {
+  const { storage, viewer, admin } = await createPdfFixture(t);
+  await viewer.get('/api/download').expect(400);
+  await viewer.get('/api/download?lang=fr').expect(400);
+  await admin.post('/api/pdf/fr').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(400);
+  await admin.delete('/api/pdf/fr').expect(400);
+  assert.equal(await storage.readPdf('resume-fr.pdf'), undefined);
 });
 
 test('non-PDF uploads are rejected without touching the file', async t => {
   const { storage, admin } = await createPdfFixture(t);
-  await admin.post('/api/pdf').set('Content-Type', 'application/pdf').send(Buffer.from('not a pdf')).expect(400)
+  await admin.post('/api/pdf/en').set('Content-Type', 'application/pdf').send(Buffer.from('not a pdf')).expect(400)
     .expect(res => assert.match(res.body.error, /not a valid PDF/));
-  await admin.post('/api/pdf').set('Content-Type', 'text/plain').send('plain text').expect(400)
+  await admin.post('/api/pdf/en').set('Content-Type', 'text/plain').send('plain text').expect(400)
     .expect(res => assert.match(res.body.error, /Content-Type: application\/pdf/));
-  assert.equal((await storage.readPdf('resume.pdf')).bytes.toString('utf8'), 'test pdf');
+  assert.equal((await storage.readPdf('resume-en.pdf')).bytes.toString('utf8'), 'test pdf');
 });
 
 test('oversized uploads are rejected as JSON', async t => {
   const { storage, admin } = await createPdfFixture(t);
   const oversized = Buffer.alloc(10 * 1024 * 1024 + 1, 0);
   oversized.write('%PDF-');
-  await admin.post('/api/pdf').set('Content-Type', 'application/pdf').send(oversized).expect(413)
+  await admin.post('/api/pdf/en').set('Content-Type', 'application/pdf').send(oversized).expect(413)
     .expect(res => assert.match(res.body.error, /10 MB/));
-  assert.equal((await storage.readPdf('resume.pdf')).bytes.toString('utf8'), 'test pdf');
+  assert.equal((await storage.readPdf('resume-en.pdf')).bytes.toString('utf8'), 'test pdf');
 });
 
-test('PDF metadata and upload require admin access', async t => {
+test('PDF metadata, upload and removal require admin access', async t => {
   const { app, viewer } = await createPdfFixture(t);
   await viewer.get('/api/pdf').expect(403);
-  await viewer.post('/api/pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(403);
+  await viewer.post('/api/pdf/en').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(403);
+  await viewer.delete('/api/pdf/en').expect(403);
   await request(app).get('/api/pdf').expect(401);
-  await request(app).post('/api/pdf').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(401);
+  await request(app).post('/api/pdf/en').set('Content-Type', 'application/pdf').send(PDF_BYTES).expect(401);
+  await request(app).delete('/api/pdf/en').expect(401);
+  await request(app).get('/api/download?lang=en').expect(401);
 });
 
 test('publication PDFs upload for admins and open inline for viewers', async t => {
@@ -104,5 +136,5 @@ test('saving removes stale unreferenced publication PDFs only', async t => {
   assert.ok(await storage.readPdf(`publication-${kept}.pdf`));
   assert.equal(await storage.readPdf(`publication-${orphan}.pdf`), undefined);
   assert.ok(await storage.readPdf(`publication-${fresh}.pdf`));
-  assert.ok(await storage.readPdf('resume.pdf'));
+  assert.ok(await storage.readPdf('resume-en.pdf'));
 });

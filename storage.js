@@ -79,7 +79,7 @@ export async function initializeStorage({ pool, ...options }) {
       const data = readMigrationData(options);
       await client.query('INSERT INTO app_document VALUES (1, $1, $2)', [JSON.stringify(data.document), randomUUID()]);
       await client.query('INSERT INTO app_collections VALUES ($1, $2)', ['passcodes', JSON.stringify(data.passcodes)]);
-      if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume.pdf', data.pdf.bytes, data.pdf.updatedAt]);
+      if (data.pdf) await client.query('INSERT INTO app_pdf VALUES ($1, $2, $3)', ['resume-en.pdf', data.pdf.bytes, data.pdf.updatedAt]);
       await client.query('INSERT INTO app_migrations (version) VALUES (1)');
     }
     const pending = DOCUMENT_MIGRATIONS.filter(([version]) => !completed.has(version));
@@ -93,6 +93,11 @@ export async function initializeStorage({ pool, ...options }) {
     if (!completed.has(4)) {
       await client.query("DELETE FROM app_collections WHERE name = 'keys'");
       await client.query('INSERT INTO app_migrations (version) VALUES (4)');
+    }
+    // Migration 5: the single résumé PDF became one PDF per language; the existing file is English.
+    if (!completed.has(5)) {
+      await client.query("UPDATE app_pdf SET name = 'resume-en.pdf' WHERE name = 'resume.pdf'");
+      await client.query('INSERT INTO app_migrations (version) VALUES (5)');
     }
   });
   console.log('PostgreSQL storage ready; migrations complete');
@@ -126,6 +131,14 @@ export function createStorage(pool) {
     async readPdf(name) {
       const { rows } = await pool.query('SELECT bytes, updated_at AS "updatedAt" FROM app_pdf WHERE name = $1', [name]);
       return rows[0];
+    },
+    async readPdfMetadata(names) {
+      const { rows } = await pool.query('SELECT name, octet_length(bytes) AS size, updated_at AS "updatedAt" FROM app_pdf WHERE name = ANY($1)', [names]);
+      return rows;
+    },
+    async deletePdf(name) {
+      const { rowCount } = await pool.query('DELETE FROM app_pdf WHERE name = $1', [name]);
+      return rowCount > 0;
     },
     async writePdf(name, bytes) {
       const { rows } = await pool.query(`INSERT INTO app_pdf VALUES ($1, $2, clock_timestamp())

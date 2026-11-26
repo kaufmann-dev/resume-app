@@ -135,7 +135,7 @@ test('passive restore does not extend idle time, while user actions do', async (
   await activeViewer.post('/api/auth/passcode').send({ passcode: 'viewer-code' }).expect(200);
   const secondCreatedAt = fixture.now;
   fixture.now = secondCreatedAt + IDLE_SESSION_MS - 1;
-  await activeViewer.get('/api/download').expect(200);
+  await activeViewer.get('/api/download?lang=en').expect(200);
   fixture.now = secondCreatedAt + IDLE_SESSION_MS + 1;
   await activeViewer.get('/api/session').expect(200);
 });
@@ -149,7 +149,7 @@ test('absolute lifetime ends active sessions at seven days', async (t) => {
 
   for (let elapsed = IDLE_SESSION_MS - 1; elapsed < ABSOLUTE_SESSION_MS; elapsed += IDLE_SESSION_MS - 1) {
     fixture.now = createdAt + elapsed;
-    await viewer.get('/api/download').expect(200);
+    await viewer.get('/api/download?lang=en').expect(200);
   }
 
   fixture.now = createdAt + ABSOLUTE_SESSION_MS;
